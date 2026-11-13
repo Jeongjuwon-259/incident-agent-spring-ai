@@ -8,6 +8,7 @@ G-SRE 서비스맵 포털 **장애 지원 AI Agent** — Java 21 / Spring Boot 3
 - Mac mini 로컬 LLM(Ollama, vLLM, llama.cpp, LM Studio, Qwen, Muse …)을 **OpenAI 호환 엔드포인트**로 붙입니다. 주소/모델은 환경변수 한 줄로 교체됩니다.
 - 모델이 없어도 `AGENT_LLM_MODE=offline` 으로 **전체 파이프라인·감사로그·품질평가가 끝까지 동작**합니다 (규칙 기반 결정적 구현). 테스트 22개가 이 모드로 실행됩니다.
 - H2 임베디드 DB + 시드 데이터(8대 테이블, 검증 SQL 6건, 골든셋 6건)로 받자마자 확인 가능합니다.
+- **MCP API 확장**: 테이블 등록만으로 외부 도구를 늘리고, 선언적 JSONPath 룰로 요청/응답을 양방향 Reshaping 합니다. ([§15](#15-mcp-api-확장과-양방향-reshaping-2026-11-13-추가))
 
 ---
 
@@ -170,8 +171,10 @@ com.samsung.gsre.agent
 ├── nl2sql        SchemaCatalog(8대 메타데이터), HeuristicQueryPlanner/SqlTemplates/AnswerComposer
 ├── gateway       SqlGuard(안전 검증), DbExecutor(JDBC), SelfRepairEngine(재시도 루프)
 ├── eval          EvalService(배치), ResultSetComparator(EX), HeuristicJudge(AA/FN), Repository
+├── mcp           McpOrchestratorService(IPO 5단계), DataReshaper(JSONPath 룰 엔진),
+│                 McpClientGateway(tools/call), McpSourceQueryReader(INBOUND 원천), Repository
 ├── audit         AuditRepository(실행/단계/LLM 이력), ConversationStore(멀티턴)
-└── web           AgentController, EvalController, CacheController, WebMapper, DTO
+└── web           AgentController, EvalController, CacheController, McpApiController, WebMapper, DTO
 ```
 
 ---
@@ -294,6 +297,7 @@ GET  /api/v1/eval/cases/{tcId}/history        # 동일 TC 과거 평가 이력
 | `agent_run_step` | 단계(1~6), 요약, 상세(계획/후보/판단/SQL/오류), 지연 |
 | `agent_llm_call` | 단계별 프롬프트·응답(8K 절단), 지연, 글자 수, 추정 토큰, 성공/오류 |
 | `agent_conversation_turn` | 세션별 user/assistant 턴 (멀티턴 맥락) |
+| `svcm_tb_mcp_payload_log` | MCP 호출 1건의 raw in / reshaped in / raw out / reshaped out, 상태코드, 소요시간, 오류 |
 
 같은 `runId` 로 묶여 있어 "어느 단계에서 어떤 SQL 이 왜 실패했는지" 를 한 번에 추적할 수 있습니다.
 개발 로그도 같은 runId 를 찍습니다: `[stage] runId=... #5/5 SQL_VALIDATE_EXECUTE | 실행 실패: ...`.
@@ -315,7 +319,8 @@ GET  /api/v1/eval/cases/{tcId}/history        # 동일 TC 과거 평가 이력
 ## 9. 데이터·메타데이터
 
 - `src/main/resources/nl2sql/schema-catalog.json` — 8대 테이블/뷰의 컬럼·타입·설명·JOIN·비즈니스 규칙. 이 파일 하나가 프롬프트, 가드 허용목록, PII 마스킹의 공통 기준입니다.
-- `schema.sql` — H2 스키마 (업무 8테이블 + Jira 원장/뷰 + 감사 + 캐시 + 평가)
+- `schema.sql` — H2 스키마 (업무 8테이블 + Jira 원장/뷰 + 감사 + 캐시 + 평가 + MCP 마스터/로그)
+- `data.sql` — MCP API 데모 시드 3건 (재기동해도 중복 삽입되지 않는 `INSERT ... WHERE NOT EXISTS`)
 - `DemoDataSeeder` — 앱 6, 부서 4, 사용자 8, 권한 17, 이슈 6, 별칭 5, 검증 SQL 6, 골든셋 6
 - 운영 DB 는 MySQL 로 교체하고 `schema.sql` 대신 마이그레이션 도구(Flyway/Liquibase)를 권장합니다.
 
@@ -335,6 +340,8 @@ GET  /api/v1/eval/cases/{tcId}/history        # 동일 TC 과거 평가 이력
 | `AGENT_MAX_REPAIR_ATTEMPTS` | `2` | Self-Repair 횟수 |
 | `AGENT_GUARD_USER_MASTER_MODE` | `MASK` | `MASK` / `DENY` / `ALLOW` |
 | `AGENT_DEMO_SEED` | `true` | 데모 데이터 삽입 |
+| `AGENT_MCP_TRANSPORT_MODE` | `AUTO` | `AUTO` / `OFFLINE` / `HTTP` (MCP 통신 모드) |
+| `AGENT_MCP_MAX_SOURCE_ROWS` | `100` | INBOUND 원천 SELECT 결과 상한 |
 | `SERVER_PORT` | `8080` | |
 
 세부 상한(tasks/executions/llm-calls/threshold/max-rows)은 `application.yml` 의 `agent.*` 에 있습니다.
@@ -356,8 +363,9 @@ mvn test
 | `AgentApiTest` (6) | 질의 API, 검증 오류 400, 검증자 없는 캐시 등록 거부, 평가 접수 202 |
 | `LlmUnavailableFlowTest` (1) | 로컬 LLM 연결 실패 시 FAILED + 조치 안내 (SUCCESS 로 덮이지 않음) |
 | `ContextSmokeTest` (1) | 컨텍스트 기동 + 파이프라인 답변 |
+| `McpReshapingFlowTest` (16) | K8s Raw→Pod 압축, 로우→tools/call 변환, 필수필드/문법 오류, 3방향 실행·감사로그, 실제 HTTP/SSE 통신, 등록/실행/404/검증 |
 
-현재 **22개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
+현재 **38개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
 
 ---
 
@@ -397,3 +405,195 @@ mvn test
 
 - Spring AI 1.0.0-M3 + Spring Boot 3.3.5 조합은 공식 지원 범위 밖이지만, 이 프로젝트는 기동·질의·평가 전체 경로를 테스트로 확인했습니다. (Spring AI 자동구성 대신 `ChatClientConfig` 에서 직접 빈 구성)
 - H2 는 `MODE=MySQL;DATABASE_TO_LOWER=TRUE` 로 운영 MySQL 문법에 가깝게 맞췄습니다.
+
+---
+
+## 15. MCP API 확장과 양방향 Reshaping (2026-11-13 추가)
+
+코드를 고치지 않고 **테이블 설정만으로 외부 MCP 도구를 늘리고**, 통신 과정의 로우데이터를
+**선언적 룰(JSONPath)** 로 양방향 재가공하는 계층입니다.
+
+### 15.1 방향 3가지
+
+| direction | 원천 | 하는 일 | 예 |
+|---|---|---|---|
+| `OUTBOUND` | 호출 파라미터 | 외부 도구 호출 → 방대한 Raw 응답을 필요한 필드만 남겨 압축 | K8s Pod 목록 |
+| `INBOUND` | 내부 DB (`source_query`) | 내부 로우를 MCP 스펙(`tools/call`)으로 변환해 외부로 발송 | Jira 작업이력 동기화 |
+| `BIDIRECTIONAL` | 내부 DB | 위 둘을 한 번에: 로우 → 발송 → 응답에서 접수 결과만 보관 | 관제 알람 발송 |
+
+방향과 무관하게 **변환 엔진은 하나**(`DataReshaper`)입니다. 입력 JSON 이 DB 로우든 외부 응답이든
+같은 룰 문법으로 매핑합니다. 이것이 "양방향" 의 실체입니다.
+
+### 15.2 테이블
+
+**`svcm_tb_mcp_api_master`** — 도구 1개 = 행 1개. 이 행이 곧 "코드 없는 도구 정의" 입니다.
+
+| 컬럼 | 설명 |
+|---|---|
+| `api_id` / `api_name` / `tool_name` | API 식별자, 표시명, MCP 도구명 |
+| `direction` | `OUTBOUND` / `INBOUND` / `BIDIRECTIONAL` |
+| `transport_type` / `endpoint_url` | `HTTP`(Streamable HTTP), 엔드포인트 |
+| `auth_type` / `auth_config` | `NONE`/`BEARER`/`API_KEY`/`BASIC`, **시크릿이 아니라 환경변수 이름** |
+| `request_schema` | 입력 파라미터 JSON Schema (문서·검증용) |
+| `request_reshaping_rule` | 요청/원천 로우 → MCP payload 룰 (CLOB) |
+| `response_reshaping_rule` | Raw 응답 → 정제 payload 룰 (CLOB) |
+| `source_query` | INBOUND 원천 SELECT (named parameter `:name` 지원) |
+| `timeout_ms` / `active_yn` / `description` | 타임아웃, 활성 여부, 설명 |
+
+**`svcm_tb_mcp_payload_log`** — 실행 1회 = 행 1회. 실패도 남깁니다.
+
+| 컬럼 | 설명 |
+|---|---|
+| `call_id` / `run_id` / `api_id` / `direction` | 호출 식별자, 에이전트 실행 연결, 대상 API |
+| `raw_payload_in` / `reshaped_payload_in` | 원본 입력(DB 로우 또는 파라미터)과 변환 결과 |
+| `raw_payload_out` / `reshaped_payload_out` | 원본 응답과 정제 결과 |
+| `status_code` / `duration_ms` / `error_message` | HTTP 상태(폴백이면 0), 소요시간, 사유 |
+
+### 15.3 Reshaping 룰 문법
+
+```json
+{
+  "version": "1.0",
+  "mode": "COLLECTION",
+  "rootPath": "$",
+  "itemPath": "$.items[*]",
+  "filter": [{"path": "$.status.phase", "op": "NE", "value": "Succeeded"}],
+  "limit": 10,
+  "dropNull": true,
+  "fields": [
+    {"target": "podName", "source": "$.metadata.name", "required": true},
+    {"target": "node", "source": "$.spec.nodeName", "default": "unassigned"},
+    {"target": "restarts", "source": "$.status.containerStatuses[*].restartCount", "aggregate": "SUM", "default": 0}
+  ],
+  "envelope": {"type": "MCP_TOOL_CALL", "tool": "k8s.pod.list", "argumentsKey": "items"}
+}
+```
+
+| 키 | 값 | 의미 |
+|---|---|---|
+| `mode` | `OBJECT` / `COLLECTION` | 객체 1건 매핑 / 배열 항목마다 매핑 |
+| `rootPath` / `itemPath` | JSONPath | 실제 데이터 위치 / 반복 경로 |
+| `filter[].op` | `EQ` `NE` `IN` `CONTAINS` `EXISTS` `GT` `LT` | 항목 제외 조건 (전체 AND) |
+| `limit` / `dropNull` | 숫자 / bool | 결과 개수 상한, null 필드 생략 |
+| `fields[].source` | JSONPath | 항목 기준 상대 경로 |
+| `fields[].constant` | JSON | 원천 없이 고정값 (예: `severity = "HIGH"`) |
+| `fields[].transform` | `TRIM` `UPPER` `LOWER` `TO_STRING` `TO_NUMBER` `TO_INT` `TO_BOOLEAN` | 값 변환 |
+| `fields[].aggregate` | `SUM` `COUNT` `AVG` `MIN` `MAX` | 여러 값을 하나로 집계 |
+| `fields[].default` / `required` | JSON / bool | 원천 부재 시 대체값 / 실패 처리 |
+| `envelope` | `{type, tool, argumentsKey}` | MCP `tools/call` 규격으로 감싸기 (INBOUND 필수) |
+
+룰 오류(깨진 JSON, 잘못된 JSONPath, 필수 필드 누락)는 조용히 넘기지 않고 **필드명과 경로를 포함한 400** 으로 돌아옵니다.
+
+### 15.4 실행 파이프라인 (IPO)
+
+```
+POST /api/v1/mcp/execute/{apiId}
+   │
+[1] 기준정보 로드 ── svcm_tb_mcp_api_master (방향·룰·엔드포인트·타임아웃)
+   │
+[2] 요청 Reshaping ── INBOUND: source_query 로우 → DataReshaper → tools/call payload
+   │                 OUTBOUND: 호출 파라미터 → arguments 정리
+[3] 통신 ─────────── McpClientGateway (MCP Streamable HTTP tools/call, JSON/SSE 응답, 인증)
+   │
+[4] 응답 Reshaping ── Raw 응답 → DataReshaper → 필요한 필드만 남긴 압축 JSON
+   │
+[5] 감사로그 ─────── raw/reshaped 4종 + 상태·소요시간을 1행으로 (실패 포함)
+   ▼
+McpExecutionResult (status, request, response, stages, warnings, logId)
+```
+
+`McpOrchestratorService` 에는 이 5단계 흐름만 있고, JSONPath 는 `DataReshaper`,
+HTTP 는 `McpClientGateway`, 원천 SQL 은 `McpSourceQueryReader` 가 맡습니다.
+
+### 15.5 사용 예
+
+```bash
+# 등록된 도구 조회 (데모 시드 3건)
+curl -s http://localhost:8080/api/v1/mcp/apis
+
+# OUTBOUND 실행 — K8s Raw 6.5KB → Pod 3건 × 6필드
+curl -s -X POST http://localhost:8080/api/v1/mcp/execute/MCP-K8S-001 \
+  -H 'Content-Type: application/json' \
+  -d '{"params":{"namespace":"svcm-portal"},"runId":"RUN-20261113205318"}'
+```
+
+```json
+{
+  "callId": "MCP-20261113205318-2572",
+  "logId": 1,
+  "apiId": "MCP-K8S-001",
+  "direction": "OUTBOUND",
+  "status": "FALLBACK",
+  "statusCode": 0,
+  "durationMs": 129,
+  "request": {"namespace": "svcm-portal", "labelSelector": "app=svcm-portal", "limit": 20},
+  "response": [
+    {"podName": "svcm-portal-7d9f8c6b5-2xk4p", "namespace": "svcm-portal", "phase": "Running",
+     "node": "macmini-node-01", "restarts": 3, "image": "registry.local/svcm/portal:2.5.1"},
+    {"podName": "svcm-portal-7d9f8c6b5-9m2vq", "namespace": "svcm-portal", "phase": "Failed",
+     "node": "macmini-node-02", "restarts": 7, "image": "registry.local/svcm/portal:2.5.1"},
+    {"podName": "svcm-portal-7d9f8c6b5-kd8zt", "namespace": "svcm-portal", "phase": "Pending",
+     "node": "unassigned", "restarts": 0, "image": "registry.local/svcm/portal:2.5.1"}
+  ],
+  "stages": [
+    "1 기준정보: MCP-K8S-001 (OUTBOUND, HTTP)",
+    "2 요청 Reshaping: 호출 파라미터 → MCP arguments 필드 3개",
+    "3 통신: k8s.pod.list → http://localhost:18080/mcp/k8s (오프라인 픽스처) 2ms",
+    "4 응답 Reshaping: raw 6537자 → 결과 3건, 제외 1건",
+    "5 감사로그: logId=1, status=FALLBACK"
+  ],
+  "warnings": ["OFFLINE_FALLBACK ConnectException"],
+  "error": "OFFLINE_FALLBACK ConnectException"
+}
+```
+
+```bash
+# INBOUND 실행 — Jira 뷰 6건을 entries[] 로 변환해 발송
+curl -s -X POST http://localhost:8080/api/v1/mcp/execute/MCP-JIRA-001 \
+  -H 'Content-Type: application/json' -d '{}'
+
+# 새 도구 등록 (코드 배포 없이)
+curl -s -X POST http://localhost:8080/api/v1/mcp/apis -H 'Content-Type: application/json' -d '{
+  "apiId":"MCP-CUSTOM-001","apiName":"사내 위키 검색","toolName":"wiki.search","direction":"OUTBOUND",
+  "endpointUrl":"http://localhost:18080/mcp/wiki",
+  "responseReshapingRule":"{\"mode\":\"COLLECTION\",\"itemPath\":\"$.pages[*]\",\"fields\":[{\"target\":\"title\",\"source\":\"$.title\"},{\"target\":\"url\",\"source\":\"$.links.self\"}]}"
+}'
+
+# 감사 로그 (raw ↔ reshaped 비교)
+curl -s 'http://localhost:8080/api/v1/mcp/logs?apiId=MCP-K8S-001&limit=5'
+```
+
+### 15.6 데모 시드 (`data.sql`)
+
+| api_id | 방향 | 원천 / 대상 | 룰이 하는 일 |
+|---|---|---|---|
+| `MCP-K8S-001` | OUTBOUND | K8s `k8s.pod.list` | 6.5KB Raw → Pod 3건 × 6필드, 컨테이너 restartCount 합산, `Succeeded` 제외, node 없으면 `unassigned` |
+| `MCP-JIRA-001` | INBOUND | Jira 뷰 `/ `jira.worklog.sync` | 6로우 → `entries[]`, snake_case→camelCase, `hours` 숫자화, summary trim, 접수 결과만 보관 |
+| `MCP-ALERT-001` | BIDIRECTIONAL | CRITICAL 자산 → `monitor.alert.push` | 2건 알람 스펙 변환, `accepted/channel/messageId` 만 정제 |
+
+### 15.7 통신 모드와 폴백
+
+| `agent.mcp.transport-mode` | 동작 |
+|---|---|
+| `AUTO` (기본) | 실제 호출 시도 → **연결 자체가 실패하면** 결정적 픽스처로 대체 (`status=FALLBACK`) |
+| `OFFLINE` | 네트워크 없이 픽스처만 (데모·테스트) |
+| `HTTP` | 실제 호출만. 실패는 숨기지 않고 502 `MCP_TRANSPORT_ERROR` |
+
+- **HTTP 4xx/5xx 는 폴백하지 않습니다.** 서버가 응답한 오류는 `status=FAILED` + `error_message=HTTP nnn` 으로 남습니다. (가짜 성공으로 덮지 않음)
+- `FALLBACK` 은 "데모 데이터로 흐름을 검증했다" 는 뜻이며, **외부 시스템에 실제 반영된 것이 아닙니다.**
+- 폴백 사유는 `warnings` 와 `error_message` 에 `OFFLINE_FALLBACK <예외>` 로 남습니다.
+
+### 15.8 보안·운영 주의
+
+- `auth_config` 에는 시크릿을 저장하지 않습니다. `{"header":"X-Api-Key","envVar":"MCP_JIRA_API_KEY"}` 처럼 **환경변수 이름**만 두고, 값은 프로세스 환경/시크릿 매니저에서 주입합니다. 값은 요청·응답·감사로그 어디에도 기록하지 않습니다.
+- `source_query` 는 `SELECT`/`WITH` 단일 문장만 허용하고, 값은 named parameter 로만 바인딩합니다. 결과는 `agent.mcp.max-source-rows` 로 제한합니다.
+- `endpoint_url` 은 `http(s)://` 만 허용합니다. 운영에서는 아웃바운드 허용 목록(egress policy)과 함께 쓰는 것을 권장합니다.
+- 감사 로그 payload 는 `agent.mcp.max-log-payload-chars`(기본 20,000자)에서 잘리고 `...(truncated n chars)` 로 표시됩니다.
+- 운영에서는 `AGENT_MCP_TRANSPORT_MODE=HTTP` 로 두어 폴백을 끄고, 실패를 그대로 드러내는 편이 안전합니다.
+
+### 15.9 한계
+
+- 룰은 항목 단위 매핑·필터·집계까지 지원합니다. 조인이나 조건부 분기(if/else)는 룰로 표현하지 않고, 필요하면 `DataReshaper` 에 노드를 추가하는 편이 읽기 쉽습니다.
+- 응답이 매우 큰 경우(수 MB) 원본은 로그에서 잘립니다. 원본 보관이 필요하면 Object Storage 로 분리해야 합니다.
+- MCP 리소스(`resources/list`)·프롬프트 기능은 다루지 않고 `tools/call` 만 사용합니다.
+- 에이전트 파이프라인(`IncidentQueryFlowService`)과의 자동 연결은 아직 없습니다. MCP 실행은 현재 관리/실행 API 로 호출하며, 답변 컨텍스트에 넣으려면 `PipelineContext` 에 MCP 실행 단계를 추가하면 됩니다.

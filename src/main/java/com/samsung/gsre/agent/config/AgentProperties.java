@@ -18,6 +18,7 @@ public class AgentProperties {
     private Guard guard = new Guard();
     private Eval eval = new Eval();
     private Demo demo = new Demo();
+    private Mcp mcp = new Mcp();
 
     @Getter
     @Setter
@@ -80,5 +81,20 @@ public class AgentProperties {
     @Setter
     public static class Demo {
         private boolean seed = true;
+    }
+
+    @Getter
+    @Setter
+    public static class Mcp {
+        /** AUTO = 실제 호출 후 실패 시 픽스처 폴백, OFFLINE = 네트워크 없이 픽스처만, HTTP = 폴백 없이 실제 호출만 */
+        private String transportMode = "AUTO";
+        private int connectTimeoutMs = 2_000;
+        private int readTimeoutMs = 5_000;
+        /** INBOUND 원천 SELECT 결과 상한 (메모리·로그 보호) */
+        private int maxSourceRows = 100;
+        /** 감사 로그에 저장하는 payload 최대 길이 (초과분은 잘라내고 표시) */
+        private int maxLogPayloadChars = 20_000;
+        /** 실제 엔드포인트 연결 실패 시 결정적 픽스처로 대체할지 여부 (AUTO 모드) */
+        private boolean offlineFallbackEnabled = true;
     }
 }

@@ -19,6 +19,18 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(body("BAD_REQUEST", e.getMessage()));
     }
 
+    /** 등록되지 않은 MCP API 실행. */
+    @ExceptionHandler(com.samsung.gsre.agent.mcp.McpApiNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleMcpNotFound(com.samsung.gsre.agent.mcp.McpApiNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body("MCP_API_NOT_FOUND", e.getMessage()));
+    }
+
+    /** 실제 MCP 엔드포인트 통신 실패 (폴백 비활성/HTTP 모드). */
+    @ExceptionHandler(com.samsung.gsre.agent.mcp.McpTransportException.class)
+    public ResponseEntity<Map<String, Object>> handleMcpTransport(com.samsung.gsre.agent.mcp.McpTransportException e) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(body("MCP_TRANSPORT_ERROR", e.getMessage()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException e) {
         Map<String, String> fields = new LinkedHashMap<>();

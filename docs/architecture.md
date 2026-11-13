@@ -116,13 +116,66 @@ Self-Repair: 오류당 1 (최대 2)
 | 최종 실패 | 답변 생성이 실패 사실을 밝히고, run 은 PARTIAL/FAILED |
 | 실행 상한 도달 | 남은 작업 건너뛰고 답변 (경고 로그·trace) |
 
-## 7. 확장 지점
+## 7. MCP 어댑터 (테이블 기반 확장 + 양방향 Reshaping)
+
+에이전트의 조회 대상은 내부 8대 테이블만이 아니다. 외부 MCP 도구도 **테이블에 등록된 룰**로
+같은 방식(기준정보 → 가공 → 통신 → 정제 → 감사)으로 다룬다.
+
+```
+POST /api/v1/mcp/execute/{apiId}
+      │
+      ▼
+McpOrchestratorService.execute(apiId, params, runId)
+      │
+      ├─ [1] McpMasterRepository.findActive(apiId)   … svcm_tb_mcp_api_master 1행
+      │
+      ├─ [2] INBOUND/BIDIRECTIONAL 이면
+      │        McpSourceQueryReader.read(api)         … source_query (SELECT 전용)
+      │        DataReshaper.reshape(request_rule)      … 로우 → {tool, arguments}
+      │      OUTBOUND 이면 DataReshaper.reshape(request_rule) … 파라미터 정리
+      │
+      ├─ [3] McpClientGateway.call(api, payload)       … tools/call (JSON/SSE, 인증)
+      │        └─ 연결 실패 + AUTO → McpFixtureCatalog (결정적 픽스처)
+      │
+      ├─ [4] DataReshaper.reshape(response_rule)       … Raw → 압축 JSON
+      │
+      ├─ [5] McpPayloadLogRepository.insert()          … raw/reshaped 4종 + 상태·소요시간
+      ▼
+McpExecutionResult (status, request, response, stages, warnings, logId)
+```
+
+| 클래스 | 책임 | 하지 않는 것 |
+|---|---|---|
+| `McpOrchestratorService` | 5단계 흐름, 실패 시에도 로그 1행, 등록 검증 | JSONPath 해석, HTTP |
+| `DataReshaper` | 룰 파싱·검증, 필드 매핑·필터·집계·변환, envelope | 통신, DB |
+| `McpClientGateway` | 요청 조립(JSON-RPC), SSE/JSON 해석, 인증 헤더, 픽스처 폴백 | 어떤 필드를 쓸지 |
+| `McpSourceQueryReader` | 원천 SELECT 실행·타입 정규화·행 수 상한 | 변환 |
+| `McpMasterRepository` / `McpPayloadLogRepository` | 테이블 CRUD | 판단 |
+
+### 룰이 코드보다 앞서는 지점
+
+- 새 외부 시스템 연동: `svcm_tb_mcp_api_master` 에 행 1개 + 룰 2개. **배포 없음.**
+- 필드명 변경/노이즈 제거: `response_reshaping_rule` 수정. **재기동만.**
+- 사고 조사: `svcm_tb_mcp_payload_log` 에서 `raw_payload_out` 과 `reshaped_payload_out` 을 나란히 비교.
+
+### 실패 처리
+
+| 실패 | 처리 |
+|---|---|
+| 룰 JSON/JSONPath 오류 | 실행 전 `ReshapingException` → 400 (필드명·경로 포함) |
+| 필수 필드 원천 없음 | `ReshapingException` → 400, 감사 로그에 FAILED 1행 |
+| 엔드포인트 연결 실패 (AUTO) | 픽스처 폴백, `status=FALLBACK`, 사유 `OFFLINE_FALLBACK …` |
+| 엔드포인트 연결 실패 (HTTP) | `McpTransportException` → 502 |
+| HTTP 4xx/5xx | 폴백 없음. `status=FAILED`, `error_message=HTTP nnn`, 원문은 raw 로그 |
+| 원천 SQL 오류 | 실행 중단 + FAILED 로그 (raw in 은 남지 않을 수 있음) |
+
+## 8. 확장 지점
 
 | 확장 | 방법 |
 |---|---|
 | 새 테이블/뷰 추가 | `schema-catalog.json` 에 추가 (프롬프트·가드·마스킹 자동 반영) |
 | 새 조회 유형 | `Intent` 추가 + (LLM 사용 시) 프롬프트 규칙 + (오프라인) `HeuristicSqlTemplates` 분기 |
-| Jira/메일/API 도구 | `LlmGateway` 옆에 Tool Worker 추가, `PipelineContext` 에 결과 누적 |
+| Jira/메일/API 도구 | `svcm_tb_mcp_api_master` 에 등록 → `POST /api/v1/mcp/execute/{apiId}` (코드 수정 없음) |
 | 벡터 저장소 | `SemanticSimilarity` 구현 교체 (pgvector/Redis/사내 RAGaaS) |
 | 감사 저장소 | `AuditRepository` 를 JDBC→Kafka/OpenSearch 로 교체 |
 | 인증/권한 | Controller 앞단 필터에서 userId/Scope 주입, `SqlGuard` 에 Scope 조건 추가 |

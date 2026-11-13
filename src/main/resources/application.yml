@@ -80,6 +80,14 @@ agent:
     judge-truncate-rows: 30
   demo:
     seed: ${AGENT_DEMO_SEED:true}
+  mcp:
+    # AUTO = 실제 호출 → 연결 실패 시 결정적 픽스처 / OFFLINE = 네트워크 없이 픽스처 / HTTP = 실제 호출만
+    transport-mode: ${AGENT_MCP_TRANSPORT_MODE:AUTO}
+    connect-timeout-ms: ${AGENT_MCP_CONNECT_TIMEOUT_MS:2000}
+    read-timeout-ms: ${AGENT_MCP_READ_TIMEOUT_MS:5000}
+    max-source-rows: ${AGENT_MCP_MAX_SOURCE_ROWS:100}
+    max-log-payload-chars: ${AGENT_MCP_MAX_LOG_PAYLOAD_CHARS:20000}
+    offline-fallback-enabled: ${AGENT_MCP_OFFLINE_FALLBACK:true}
 
 logging:
   level:
