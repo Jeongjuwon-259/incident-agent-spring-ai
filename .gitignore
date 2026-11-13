@@ -1,0 +1,26 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IDE ###
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+
+### H2 / runtime ###
+agent-db*.db
+agent-db*.trace.db
+agent-db.lock.db
+data/
+*.log
+logs/
+
+### OS ###
+.DS_Store
+Thumbs.db

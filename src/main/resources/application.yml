@@ -1,0 +1,88 @@
+spring:
+  application:
+    name: incident-agent-spring-ai
+
+  # Spring AI OpenAI 자동구성은 사용하지 않고 ChatClientConfig 에서 직접 와이어링한다.
+  # (base-url / timeout / 모델을 코드에서 명시적으로 제어하기 위함. starter 의 클래스는 그대로 사용)
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.openai.OpenAiAutoConfiguration
+
+  datasource:
+    url: jdbc:h2:file:./agent-db;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 8
+
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: false
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+  ai:
+    openai:
+      # Mac mini 로컬 LLM (Ollama / vLLM / llama.cpp / LM Studio ...) - OpenAI 호환 엔드포인트
+      base-url: ${LOCAL_LLM_BASE_URL:http://localhost:11434/v1}
+      api-key: ${LOCAL_LLM_API_KEY:local-no-key}
+      chat:
+        options:
+          model: ${LOCAL_LLM_MODEL:qwen2.5:14b}
+          temperature: 0.0
+      embedding:
+        options:
+          model: ${LOCAL_LLM_EMBEDDING_MODEL:nomic-embed-text}
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+agent:
+  llm:
+    # local: Spring AI ChatClient 로 로컬 LLM 호출 / offline: 모델 없이 규칙 기반으로 전체 파이프라인 동작(데모·테스트)
+    mode: ${AGENT_LLM_MODE:local}
+    connect-timeout-ms: ${AGENT_LLM_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${AGENT_LLM_READ_TIMEOUT_MS:120000}
+    max-tokens: ${AGENT_LLM_MAX_TOKENS:1200}
+  pipeline:
+    max-tasks: 5
+    max-extra-rounds: 2
+    max-executions: 6
+    max-llm-calls: 24
+    max-repair-attempts: ${AGENT_MAX_REPAIR_ATTEMPTS:2}
+    history-turns: 6
+  rag:
+    top-k: 5
+    similarity-threshold: 0.80
+    # auto: 임베딩 모델이 동작하면 임베딩 유사도, 실패하면 어휘 유사도로 폴백
+    similarity-mode: ${AGENT_RAG_SIMILARITY:auto}
+    embedding-enabled: ${AGENT_RAG_EMBEDDING_ENABLED:true}
+  guard:
+    max-rows: 200
+    query-timeout-seconds: 5
+    mask-pii: true
+    # MASK: user 마스터 직접 조회 허용 + PII 컬럼 마스킹 / DENY: 직접 조회 차단 / ALLOW: 마스킹 없음
+    user-master-mode: ${AGENT_GUARD_USER_MASTER_MODE:MASK}
+  eval:
+    max-cases-per-batch: 100
+    judge-truncate-rows: 30
+  demo:
+    seed: ${AGENT_DEMO_SEED:true}
+
+logging:
+  level:
+    root: INFO
+    com.samsung.gsre.agent: INFO
+    org.springframework.jdbc.core: INFO

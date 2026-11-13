@@ -1,0 +1,167 @@
+{
+  "version": "1.0.0",
+  "description": "G-SRE 서비스맵 포털 장애 지원 AI Agent NL2SQL 메타데이터 딕셔너리 (8대 조회 대상)",
+  "business_rules": [
+    "APP 담당자는 svcm_tb_app_user_map.role_code = 'OWNER' 인 사용자다.",
+    "장애 이슈는 jira issue_type = 'INCIDENT' 이며 svcm_vw_jira_dri_worklog 뷰로 조회한다.",
+    "최근 작업이력은 worklog_date 내림차순으로 정렬한다.",
+    "부서장은 svcm_tb_dept_info_master.dept_head_name 이다.",
+    "APP 별칭은 svcm_tb_app_alias 에 정본으로 관리되며 alias_type 은 OFFICIAL/LEGACY/SHORT 다.",
+    "최종 검수·승인 정보는 svcm_tb_svc_master 의 inspect_status/approve_status 로 판단한다.",
+    "개인정보(email, phone, emp_no)는 요청 목적에 필요할 때만 조회하고 결과는 마스킹될 수 있다."
+  ],
+  "tables": [
+    {
+      "name": "svcm_tb_app_master",
+      "type": "TABLE",
+      "description": "애플리케이션 마스터. 서비스맵에 등록된 APP 의 기본 정보와 담당 부서.",
+      "key_columns": ["app_id"],
+      "columns": [
+        {"name": "app_id", "type": "VARCHAR(20)", "description": "APP 식별자 (예: APP-1001)", "pii": false},
+        {"name": "app_name", "type": "VARCHAR(100)", "description": "APP 명", "pii": false},
+        {"name": "app_type", "type": "VARCHAR(20)", "description": "WEB/WAS/BATCH/API", "pii": false},
+        {"name": "service_id", "type": "VARCHAR(20)", "description": "소속 서비스 ID (svcm_tb_service_map_master.service_id)", "pii": false},
+        {"name": "dept_id", "type": "VARCHAR(20)", "description": "운영 부서 ID (svcm_tb_dept_info_master.dept_id)", "pii": false},
+        {"name": "status", "type": "VARCHAR(20)", "description": "운영 상태 OPERATING/MAINTENANCE/RETIRED", "pii": false},
+        {"name": "criticality", "type": "VARCHAR(10)", "description": "중요도 CRITICAL/HIGH/MEDIUM/LOW", "pii": false},
+        {"name": "description", "type": "VARCHAR(500)", "description": "APP 설명", "pii": false},
+        {"name": "created_at", "type": "TIMESTAMP", "description": "등록 일시", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_service_map_master", "on": "svcm_tb_app_master.service_id = svcm_tb_service_map_master.service_id", "description": "APP 가 속한 서비스"},
+        {"to_table": "svcm_tb_dept_info_master", "on": "svcm_tb_app_master.dept_id = svcm_tb_dept_info_master.dept_id", "description": "APP 운영 부서"},
+        {"to_table": "svcm_tb_app_user_map", "on": "svcm_tb_app_master.app_id = svcm_tb_app_user_map.app_id", "description": "APP 사용자/담당자 매핑"}
+      ],
+      "notes": "APP_ID 로 단건 조회하는 것이 기본 경로다."
+    },
+    {
+      "name": "svcm_tb_dept_info_master",
+      "type": "TABLE",
+      "description": "부서 정보 마스터. 부서장과 조직 코드를 관리한다.",
+      "key_columns": ["dept_id"],
+      "columns": [
+        {"name": "dept_id", "type": "VARCHAR(20)", "description": "부서 ID", "pii": false},
+        {"name": "dept_name", "type": "VARCHAR(100)", "description": "부서명 (예: SRE플랫폼팀)", "pii": false},
+        {"name": "parent_dept_id", "type": "VARCHAR(20)", "description": "상위 부서 ID", "pii": false},
+        {"name": "dept_head_name", "type": "VARCHAR(50)", "description": "부서장 성명", "pii": true},
+        {"name": "org_code", "type": "VARCHAR(20)", "description": "조직 코드", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_app_master", "on": "svcm_tb_dept_info_master.dept_id = svcm_tb_app_master.dept_id", "description": "부서가 운영하는 APP"}
+      ],
+      "notes": "부서명은 정확히 일치하는 경우가 많지만 LIKE 검색도 허용한다."
+    },
+    {
+      "name": "svcm_tb_service_map_master",
+      "type": "TABLE",
+      "description": "서비스 맵. 서비스 단위 도메인과 설명을 관리한다.",
+      "key_columns": ["service_id"],
+      "columns": [
+        {"name": "service_id", "type": "VARCHAR(20)", "description": "서비스 ID (예: SVC-01)", "pii": false},
+        {"name": "service_name", "type": "VARCHAR(100)", "description": "서비스 명", "pii": false},
+        {"name": "domain_name", "type": "VARCHAR(100)", "description": "서비스 도메인", "pii": false},
+        {"name": "description", "type": "VARCHAR(500)", "description": "서비스 설명", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_app_master", "on": "svcm_tb_service_map_master.service_id = svcm_tb_app_master.service_id", "description": "서비스에 속한 APP 목록"}
+      ],
+      "notes": "서비스맵 질의는 service_id 또는 service_name 으로 조회한다."
+    },
+    {
+      "name": "svcm_tb_svc_master",
+      "type": "TABLE",
+      "description": "APP_ID 기준 최종 검수·승인 완료 정보와 사용자 입력값.",
+      "key_columns": ["svc_id"],
+      "columns": [
+        {"name": "svc_id", "type": "VARCHAR(20)", "description": "검수 레코드 ID", "pii": false},
+        {"name": "app_id", "type": "VARCHAR(20)", "description": "대상 APP ID", "pii": false},
+        {"name": "inspect_status", "type": "VARCHAR(20)", "description": "검수 상태 PASS/FAIL/PENDING", "pii": false},
+        {"name": "approve_status", "type": "VARCHAR(20)", "description": "승인 상태 APPROVED/REJECTED/PENDING", "pii": false},
+        {"name": "approve_date", "type": "DATE", "description": "승인 일자", "pii": false},
+        {"name": "reviewer_id", "type": "VARCHAR(20)", "description": "검수자 사용자 ID", "pii": false},
+        {"name": "user_input_value", "type": "VARCHAR(500)", "description": "사용자 입력값(검수 메모)", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_app_master", "on": "svcm_tb_svc_master.app_id = svcm_tb_app_master.app_id", "description": "검수 대상 APP"}
+      ],
+      "notes": "APP 당 최신 승인 1건을 조회할 때 approve_date 내림차순으로 정렬한다."
+    },
+    {
+      "name": "svcm_tb_app_user_map",
+      "type": "TABLE",
+      "description": "애플리케이션-사용자 매핑. 담당자(OWNER), 운영자(OPERATOR), 조회자(VIEWER) 권한을 가진다.",
+      "key_columns": ["map_id"],
+      "columns": [
+        {"name": "map_id", "type": "VARCHAR(20)", "description": "매핑 ID", "pii": false},
+        {"name": "app_id", "type": "VARCHAR(20)", "description": "APP ID", "pii": false},
+        {"name": "user_id", "type": "VARCHAR(20)", "description": "사용자 ID (svcm_tb_user_info_master.user_id)", "pii": false},
+        {"name": "role_code", "type": "VARCHAR(20)", "description": "권한 OWNER/OPERATOR/VIEWER", "pii": false},
+        {"name": "granted_at", "type": "DATE", "description": "권한 부여일", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_user_info_master", "on": "svcm_tb_app_user_map.user_id = svcm_tb_user_info_master.user_id", "description": "매핑된 사용자 정보"},
+        {"to_table": "svcm_tb_app_master", "on": "svcm_tb_app_user_map.app_id = svcm_tb_app_master.app_id", "description": "대상 APP"}
+      ],
+      "notes": "담당자 수/사용자 수 집계의 기준 테이블이다."
+    },
+    {
+      "name": "svcm_tb_user_info_master",
+      "type": "TABLE",
+      "description": "사용자 정보 마스터. 17만 사원 정보를 담고 있어 직접 전체 조회는 금지된다.",
+      "key_columns": ["user_id"],
+      "columns": [
+        {"name": "user_id", "type": "VARCHAR(20)", "description": "사용자 ID", "pii": false},
+        {"name": "user_name", "type": "VARCHAR(50)", "description": "성명", "pii": true},
+        {"name": "email", "type": "VARCHAR(100)", "description": "이메일", "pii": true},
+        {"name": "phone", "type": "VARCHAR(30)", "description": "연락처", "pii": true},
+        {"name": "dept_id", "type": "VARCHAR(20)", "description": "소속 부서 ID", "pii": false},
+        {"name": "emp_no", "type": "VARCHAR(20)", "description": "사번", "pii": true},
+        {"name": "job_title", "type": "VARCHAR(50)", "description": "직책", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_dept_info_master", "on": "svcm_tb_user_info_master.dept_id = svcm_tb_dept_info_master.dept_id", "description": "사용자 소속 부서"}
+      ],
+      "notes": "직접 조회 시 반드시 APP_ID/사용자 ID 등 좁은 조건과 함께 조회하고, SELECT * 는 금지. PII 컬럼은 마스킹된다."
+    },
+    {
+      "name": "svcm_vw_jira_dri_worklog",
+      "type": "VIEW",
+      "description": "Jira 작업이력 조회 뷰. 장애/변경 이슈와 작업시간, 담당자, 대상 APP 을 함께 보여준다.",
+      "key_columns": ["issue_key"],
+      "columns": [
+        {"name": "issue_key", "type": "VARCHAR(30)", "description": "Jira 이슈 키 (예: INC-1042)", "pii": false},
+        {"name": "project_key", "type": "VARCHAR(20)", "description": "Jira 프로젝트 키", "pii": false},
+        {"name": "app_id", "type": "VARCHAR(20)", "description": "대상 APP ID", "pii": false},
+        {"name": "app_name", "type": "VARCHAR(100)", "description": "대상 APP 명", "pii": false},
+        {"name": "assignee_id", "type": "VARCHAR(20)", "description": "작업자 사용자 ID", "pii": false},
+        {"name": "assignee_name", "type": "VARCHAR(50)", "description": "작업자 성명", "pii": true},
+        {"name": "assignee_dept", "type": "VARCHAR(100)", "description": "작업자 부서명", "pii": false},
+        {"name": "issue_type", "type": "VARCHAR(20)", "description": "INCIDENT/CHANGE/TASK", "pii": false},
+        {"name": "status", "type": "VARCHAR(20)", "description": "이슈 상태 DONE/IN_PROGRESS/OPEN", "pii": false},
+        {"name": "summary", "type": "VARCHAR(300)", "description": "이슈 제목", "pii": false},
+        {"name": "worklog_hours", "type": "DECIMAL(5,1)", "description": "작업 시간(시간 단위)", "pii": false},
+        {"name": "worklog_date", "type": "DATE", "description": "작업 일자", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_app_master", "on": "svcm_vw_jira_dri_worklog.app_id = svcm_tb_app_master.app_id", "description": "이슈 대상 APP"}
+      ],
+      "notes": "뷰는 이미 APP/사용자/부서가 조인되어 있다. 추가 조인 없이 app_id 로 필터링한다."
+    },
+    {
+      "name": "svcm_tb_app_alias",
+      "type": "TABLE",
+      "description": "APP 별칭 정본. 공식명/과거명/약칭을 APP_ID 와 연결한다.",
+      "key_columns": ["alias_id"],
+      "columns": [
+        {"name": "alias_id", "type": "VARCHAR(20)", "description": "별칭 ID", "pii": false},
+        {"name": "app_id", "type": "VARCHAR(20)", "description": "APP ID", "pii": false},
+        {"name": "alias_name", "type": "VARCHAR(100)", "description": "별칭 (예: 서비스맵)", "pii": false},
+        {"name": "alias_type", "type": "VARCHAR(20)", "description": "OFFICIAL/LEGACY/SHORT", "pii": false}
+      ],
+      "joins": [
+        {"to_table": "svcm_tb_app_master", "on": "svcm_tb_app_alias.app_id = svcm_tb_app_master.app_id", "description": "별칭이 가리키는 APP"}
+      ],
+      "notes": "사용자가 APP 명 대신 별칭으로 물으면 이 테이블에서 APP_ID 를 먼저 찾는다."
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G-SRE 장애 지원 AI Agent 콘솔</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #16213a; --panel2: #1e2b47; --line: #2b3a5c;
+    --text: #e6ecf7; --muted: #93a4c3; --accent: #4f8cff; --ok: #25b37a; --warn: #e0a52b; --bad: #e05757;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif; }
+  header { padding: 18px 24px 10px; border-bottom: 1px solid var(--line); background: #0b1222; }
+  header h1 { margin: 0; font-size: 19px; letter-spacing: .2px; }
+  header p { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+  nav { display: flex; gap: 6px; padding: 12px 24px 0; }
+  nav button { background: transparent; color: var(--muted); border: 1px solid transparent;
+               border-bottom: none; padding: 9px 16px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13.5px; }
+  nav button.active { background: var(--panel); color: var(--text); border-color: var(--line); }
+  main { padding: 0 24px 40px; }
+  section.tab { display: none; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 0 10px 10px 10px; padding: 18px; }
+  section.tab.active { display: block; }
+  h2 { font-size: 14px; margin: 0 0 10px; color: #cfe0ff; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  label { font-size: 12px; color: var(--muted); }
+  input, textarea, select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+                            border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit; }
+  textarea { width: 100%; min-height: 76px; resize: vertical; }
+  input[type=text] { min-width: 220px; }
+  button.primary { background: var(--accent); border: none; color: white; padding: 10px 18px;
+                   border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  button.ghost { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+                 padding: 8px 13px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+  button:disabled { opacity: .45; cursor: default; }
+  .answer { background: #0b1222; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+            border-radius: 8px; padding: 14px 16px; white-space: pre-wrap; line-height: 1.65; font-size: 14px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .chip { font-size: 11.5px; color: var(--muted); border: 1px solid var(--line);
+          border-radius: 999px; padding: 3px 10px; background: var(--panel2); }
+  .chip b { color: var(--text); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .3px; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: var(--panel2); }
+  .badge { display: inline-block; min-width: 38px; text-align: center; border-radius: 5px;
+           padding: 2px 7px; font-size: 11px; font-weight: 700; }
+  .badge.pass { background: rgba(37,179,122,.16); color: var(--ok); border: 1px solid rgba(37,179,122,.4); }
+  .badge.fail { background: rgba(224,87,87,.14); color: var(--bad); border: 1px solid rgba(224,87,87,.4); }
+  .badge.run { background: rgba(224,165,43,.14); color: var(--warn); border: 1px solid rgba(224,165,43,.4); }
+  pre { background: #0b1222; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+        overflow: auto; font-size: 11.8px; color: #c9d8f2; margin: 6px 0 0; }
+  .trace { list-style: none; margin: 8px 0 0; padding: 0; }
+  .trace li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 12.5px; }
+  .trace .seq { color: var(--muted); width: 26px; }
+  .trace .stage { color: #a9c4f5; width: 190px; }
+  .muted { color: var(--muted); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  .error { color: var(--bad); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>G-SRE 서비스맵 포털 · 장애 지원 AI Agent 콘솔</h1>
+  <p>6단계 상태머신 · 검증 SQL 시맨틱 캐시 · NL2SQL · Self-Repair · 품질평가(EX/AA/FN)</p>
+</header>
+
+<nav>
+  <button class="active" data-tab="query">질의 테스트</button>
+  <button data-tab="eval">품질 평가</button>
+  <button data-tab="cache">검증 SQL 캐시</button>
+</nav>
+
+<main>
+  <!-- ================= 질의 ================= -->
+  <section id="tab-query" class="tab active">
+    <h2>자연어 질의 → 6단계 파이프라인 실행</h2>
+    <div class="row">
+      <label>세션</label>
+      <input type="text" id="sessionId">
+      <button class="ghost" id="newSession">새 세션</button>
+      <label>채널</label>
+      <select id="channel">
+        <option>WEB</option><option>MESSENGER</option>
+      </select>
+    </div>
+    <textarea id="question" placeholder="예: APP-1001 서비스맵포털 담당자 알려줘"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="askBtn">질의 실행</button>
+      <button class="ghost sample" data-q="APP-1001 서비스맵포털 담당자 알려줘">담당자</button>
+      <button class="ghost sample" data-q="APP-1002 장애지원에이전트를 사용하는 사용자는 몇 명인가">사용자 수</button>
+      <button class="ghost sample" data-q="SRE플랫폼팀 부서장은 누구인가">부서장</button>
+      <button class="ghost sample" data-q="APP-1003 배포관리콘솔 관련 Jira 작업이력 보여줘">Jira 이력</button>
+      <button class="ghost sample" data-q="서비스맵 별칭을 가진 APP ID는 무엇인가">별칭</button>
+      <span id="askError" class="error"></span>
+    </div>
+
+    <div id="answerBox" style="display:none">
+      <div class="meta" id="answerMeta"></div>
+      <div class="answer" id="answerText"></div>
+      <h2 style="margin-top:18px">단계별 실행 이력</h2>
+      <ul class="trace" id="traceList"></ul>
+      <h2 style="margin-top:18px">실행 SQL / 결과</h2>
+      <div id="lookupList"></div>
+    </div>
+  </section>
+
+  <!-- ================= 평가 ================= -->
+  <section id="tab-eval" class="tab">
+    <div class="split">
+      <div>
+        <h2>테스트 케이스</h2>
+        <div class="row">
+          <button class="ghost" id="reloadCases">새로고침</button>
+          <button class="ghost" id="selectAll">전체 선택</button>
+          <button class="primary" id="runEval">선택 항목 평가 실행</button>
+          <span id="evalError" class="error"></span>
+        </div>
+        <table>
+          <thead><tr><th style="width:34px"></th><th>TC</th><th>질의</th><th>카테고리</th></tr></thead>
+          <tbody id="caseRows"></tbody>
+        </table>
+      </div>
+      <div>
+        <h2>평가 배치</h2>
+        <div class="row"><button class="ghost" id="reloadBatches">새로고침</button></div>
+        <table>
+          <thead><tr><th>Batch</th><th>상태</th><th>통과율</th><th>건수</th></tr></thead>
+          <tbody id="batchRows"></tbody>
+        </table>
+        <h2 style="margin-top:18px">TC별 결과 <span id="resultBatch" class="muted" style="font-weight:400"></span></h2>
+        <table>
+          <thead><tr><th>TC</th><th>EX</th><th>AA</th><th>FN</th><th>실행</th><th>종합</th></tr></thead>
+          <tbody id="resultRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 캐시 ================= -->
+  <section id="tab-cache" class="tab">
+    <h2>검증 SQL 캐시 <span class="muted" style="font-weight:400">— 사람이 검증한 SQL만 등록됩니다</span></h2>
+    <div class="row"><button class="ghost" id="reloadCache">새로고침</button></div>
+    <table>
+      <thead><tr><th>ID</th><th>질의</th><th>검증자</th><th>사용</th><th>SQL</th></tr></thead>
+      <tbody id="cacheRows"></tbody>
+    </table>
+    <h2 style="margin-top:22px">검증 SQL 등록</h2>
+    <div class="row">
+      <input type="text" id="cacheQuestion" placeholder="질의" style="flex:1">
+      <input type="text" id="cacheVerifier" placeholder="검증자 (필수)" style="width:160px">
+      <button class="primary" id="registerCache">등록</button>
+    </div>
+    <textarea id="cacheSql" placeholder="SELECT ... (SELECT 문만, 테이블은 메타데이터 허용 목록만)"></textarea>
+    <div class="row" style="margin-top:8px"><span id="cacheError" class="error"></span></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const text = await res.text();
+  const body = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const msg = body && (body.message || body.error) ? body.message || body.error : '요청 실패 (' + res.status + ')';
+    throw new Error(msg);
+  }
+  return body;
+}
+
+// ---------------- 탭 ----------------
+document.querySelectorAll('nav button').forEach(btn => btn.onclick = () => {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + btn.dataset.tab));
+  if (btn.dataset.tab === 'eval') { loadCases(); loadBatches(); }
+  if (btn.dataset.tab === 'cache') loadCache();
+});
+
+// ---------------- 질의 ----------------
+function newSession() {
+  $('sessionId').value = 'web-' + Date.now().toString(36);
+}
+newSession();
+$('newSession').onclick = newSession;
+document.querySelectorAll('.sample').forEach(b => b.onclick = () => { $('question').value = b.dataset.q; });
+
+$('askBtn').onclick = async () => {
+  $('askError').textContent = '';
+  const question = $('question').value.trim();
+  if (!question) { $('askError').textContent = '질의를 입력해 주세요.'; return; }
+  $('askBtn').disabled = true;
+  try {
+    const r = await api('/api/v1/agent/query', {
+      method: 'POST',
+      body: JSON.stringify({ userId: 'web-user', channel: $('channel').value,
+                             sessionId: $('sessionId').value, question })
+    });
+    renderResult(r);
+  } catch (e) {
+    $('askError').textContent = e.message;
+  } finally {
+    $('askBtn').disabled = false;
+  }
+};
+
+function renderResult(r) {
+  $('answerBox').style.display = 'block';
+  const statusClass = r.status === 'SUCCESS' ? 'pass' : (r.status === 'FAILED' ? 'fail' : 'run');
+  $('answerMeta').innerHTML = [
+    chip('상태', `<span class="badge ${statusClass}">${esc(r.status)}</span>`),
+    chip('runId', esc(r.runId)),
+    chip('의도', esc(r.planIntent)),
+    chip('캐시 재사용', r.cacheHit ? 'O' : 'X'),
+    chip('LLM 호출', r.llmCalls + '회'),
+    chip('소요', r.durationMs + 'ms')
+  ].join('');
+  $('answerText').textContent = r.answer || '(답변 없음)';
+  $('traceList').innerHTML = (r.trace || []).map(t =>
+    `<li><span class="seq">${t.seq}</span><span class="stage">${esc(t.stageLabel)}</span>
+     <span style="flex:1">${esc(t.summary)}</span><span class="muted">${t.latencyMs}ms</span></li>`).join('');
+  $('lookupList').innerHTML = (r.lookups || []).map((l, i) => `
+    <div style="margin-bottom:14px">
+      <div class="meta">${chip('조회', esc(l.purpose))}${chip('출처', esc(l.origin))}
+        ${chip('행', l.rowCount)}${l.failed ? '<span class="badge fail">FAILED</span>' : ''}</div>
+      <pre>${esc(l.sql)}</pre>
+      ${l.errorMessage ? `<div class="error">${esc(l.errorMessage)}</div>` : ''}
+      ${l.repairNotes && l.repairNotes.length ? `<pre>Self-Repair: ${esc(l.repairNotes.join(' / '))}</pre>` : ''}
+      ${l.preview && l.preview.length ? `<pre>${esc(JSON.stringify(l.preview, null, 2))}</pre>` : ''}
+    </div>`).join('');
+}
+const chip = (label, value) => `<span class="chip">${esc(label)} <b>${value}</b></span>`;
+
+// ---------------- 평가 ----------------
+function loadCases() {
+  $('evalError').textContent = '';
+  api('/api/v1/eval/cases').then(cases => {
+    $('caseRows').innerHTML = cases.map(c => `
+      <tr><td><input type="checkbox" class="tc-check" value="${esc(c.tcId)}"></td>
+      <td>${esc(c.tcId)}</td><td>${esc(c.question)}</td><td class="muted">${esc(c.category)}</td></tr>`).join('');
+  }).catch(e => $('evalError').textContent = e.message);
+}
+$('reloadCases').onclick = loadCases;
+$('selectAll').onclick = () => document.querySelectorAll('.tc-check').forEach(c => c.checked = true);
+
+$('runEval').onclick = async () => {
+  $('evalError').textContent = '';
+  const ids = [...document.querySelectorAll('.tc-check:checked')].map(c => c.value);
+  $('runEval').disabled = true;
+  try {
+    const start = await api('/api/v1/eval/batches', {
+      method: 'POST',
+      body: JSON.stringify({ tcIds: ids, all: ids.length === 0, requestedBy: 'web-console' })
+    });
+    await waitBatch(start.batchId);
+  } catch (e) {
+    $('evalError').textContent = e.message;
+  } finally {
+    $('runEval').disabled = false;
+    loadBatches();
+  }
+};
+
+async function waitBatch(batchId) {
+  for (let i = 0; i < 200; i++) {
+    const b = await api('/api/v1/eval/batches/' + encodeURIComponent(batchId));
+    if (b.status !== 'RUNNING') { await showResults(batchId); loadBatches(); return; }
+    await new Promise(r => setTimeout(r, 700));
+  }
+}
+
+function loadBatches() {
+  api('/api/v1/eval/batches?limit=20').then(list => {
+    $('batchRows').innerHTML = list.map(b => `
+      <tr class="clickable" data-batch="${esc(b.batchId)}">
+        <td>${esc(b.batchId)}</td>
+        <td><span class="badge ${b.status === 'COMPLETED' ? 'pass' : (b.status === 'FAILED' ? 'fail' : 'run')}">${esc(b.status)}</span></td>
+        <td>${(b.passRate ?? 0).toFixed(1)}%</td>
+        <td class="muted">${b.passedCount}/${b.totalCount}</td>
+      </tr>`).join('');
+    document.querySelectorAll('#batchRows tr[data-batch]').forEach(tr =>
+      tr.onclick = () => showResults(tr.dataset.batch));
+    if (list.length) showResults(list[0].batchId);
+  }).catch(e => $('evalError').textContent = e.message);
+}
+$('reloadBatches').onclick = loadBatches;
+
+async function showResults(batchId) {
+  $('resultBatch').textContent = '· ' + batchId;
+  const rows = await api('/api/v1/eval/batches/' + encodeURIComponent(batchId) + '/results');
+  const badge = (pass, reason) => `<span class="badge ${pass ? 'pass' : 'fail'}" title="${esc(reason)}">${pass ? 'P' : 'F'}</span>`;
+  $('resultRows').innerHTML = rows.map(r => `
+    <tr title="${esc(r.overallReason)}">
+      <td>${esc(r.tcId)}</td>
+      <td>${badge(r.exPass, r.exReason)}</td>
+      <td>${badge(r.aaPass, r.aaReason)}</td>
+      <td>${badge(r.fnPass, r.fnReason)}</td>
+      <td>${badge(r.execPass, r.execReason)}</td>
+      <td>${badge(r.overallPass, r.overallReason)}</td>
+    </tr>`).join('');
+}
+
+// ---------------- 캐시 ----------------
+function loadCache() {
+  $('cacheError').textContent = '';
+  api('/api/v1/cache').then(list => {
+    $('cacheRows').innerHTML = list.map(e => `
+      <tr><td>${e.id}</td><td>${esc(e.question)}</td><td>${esc(e.verifiedBy)}</td>
+      <td>${e.useCount}</td><td><pre style="max-width:520px">${esc(e.sql)}</pre></td></tr>`).join('');
+  }).catch(e => $('cacheError').textContent = e.message);
+}
+$('reloadCache').onclick = loadCache;
+
+$('registerCache').onclick = async () => {
+  $('cacheError').textContent = '';
+  try {
+    await api('/api/v1/cache', {
+      method: 'POST',
+      body: JSON.stringify({ question: $('cacheQuestion').value, sql: $('cacheSql').value,
+                             verifiedBy: $('cacheVerifier').value, parameters: {} })
+    });
+    $('cacheSql').value = '';
+    loadCache();
+  } catch (e) {
+    $('cacheError').textContent = e.message;
+  }
+};
+</script>
+</body>
+</html>
