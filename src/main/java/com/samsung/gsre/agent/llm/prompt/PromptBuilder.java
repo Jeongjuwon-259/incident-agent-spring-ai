@@ -27,6 +27,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>모든 단계는 "JSON 하나만 출력" 을 요구하고, 파싱에 실패하면 호출한 쪽이
  * 규칙 기반 폴백으로 넘어갈 수 있도록 {@code null} 을 돌려준다.</p>
+ *
+ * <h2>IPO 배치 (이 클래스의 규칙)</h2>
+ * <p>단계마다 <b>프롬프트 생성(INPUT)</b> → <b>응답 파싱(OUTPUT)</b> 한 쌍을 같은 순서로 배치한다.
+ * 단계 순서(1→3→4→6→평가)가 곧 흐름 순서이므로, 클래스 전체를 INPUT/OUTPUT 두 덩어리로
+ * 재정렬하지 않는다. 공통 렌더링 유틸은 맨 아래에 둔다.</p>
  */
 @Component
 @RequiredArgsConstructor

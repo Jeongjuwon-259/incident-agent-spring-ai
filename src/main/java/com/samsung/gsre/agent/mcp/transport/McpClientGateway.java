@@ -3,10 +3,13 @@ package com.samsung.gsre.agent.mcp.transport;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.samsung.gsre.agent.common.constant.McpConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.mcp.McpApiMaster;
 import com.samsung.gsre.agent.mcp.exception.McpTransportException;
 import com.samsung.gsre.agent.mcp.fixture.McpFixtureCatalog;
+import com.samsung.gsre.agent.security.net.OutboundTargetPolicy;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -33,21 +36,32 @@ import org.springframework.stereotype.Component;
 @Component
 public class McpClientGateway {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보와 의존성
+    // ==================================================================
+
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final McpFixtureCatalog fixtures;
+    private final OutboundTargetPolicy targetPolicy;
     private final HttpClient http;
     private final AtomicLong jsonRpcId = new AtomicLong(1);
 
-    public McpClientGateway(ObjectMapper mapper, AgentProperties props, McpFixtureCatalog fixtures) {
+    public McpClientGateway(ObjectMapper mapper, AgentProperties props, McpFixtureCatalog fixtures,
+                            OutboundTargetPolicy targetPolicy) {
         this.mapper = mapper;
         this.props = props;
         this.fixtures = fixtures;
+        this.targetPolicy = targetPolicy;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(200, props.getMcp().getConnectTimeoutMs())))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
     }
+
+    // ==================================================================
+    // 중단 (PROCESS) — JSON-RPC 조립 → 전송
+    // ==================================================================
 
     public McpCallResult call(McpApiMaster api, JsonNode requestPayload) {
         String requestBody = buildRequestBody(api, requestPayload);
@@ -56,6 +70,9 @@ public class McpClientGateway {
         if (mode == McpTransportMode.OFFLINE) {
             return fixture(api, requestBody, "transport-mode=OFFLINE");
         }
+
+        // SSRF 방어: 등록 후 테이블이 바뀌었을 수 있으므로 전송 직전에 다시 검사한다.
+        targetPolicy.verify(api.endpointUrl());
 
         long startedAt = System.nanoTime();
         try {
@@ -113,8 +130,8 @@ public class McpClientGateway {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(api.endpointUrl()))
                 .timeout(Duration.ofMillis(api.timeoutMs()))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json, text/event-stream")
+                .header(McpConstants.HEADER_CONTENT_TYPE, McpConstants.CONTENT_TYPE_JSON)
+                .header(McpConstants.HEADER_ACCEPT, McpConstants.ACCEPT_JSON_AND_SSE)
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody));
         applyAuth(api, builder);
         return builder.build();
@@ -125,9 +142,9 @@ public class McpClientGateway {
         McpAuthHeaders.resolve(api, mapper).forEach(builder::header);
     }
 
-    // ------------------------------------------------------------------
-    // 응답 해석
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 하단 (OUTPUT) — 응답 해석 / 폴백 / 결과
+    // ==================================================================
 
     /** SSE 로 온 응답에서 첫 data 프레임만 꺼낸다. 일반 JSON 이면 그대로 돌려준다. */
     private String extractPayloadBody(String body) {
@@ -150,7 +167,7 @@ public class McpClientGateway {
 
     /** JSON-RPC 봉투 → result.content[].text → 실제 도구 결과 순으로 벗긴다. */
     private JsonNode unwrap(String body) {
-        if (body == null || body.isBlank()) {
+        if (ValidationUtils.isBlank(body)) {
             return mapper.nullNode();
         }
         try {

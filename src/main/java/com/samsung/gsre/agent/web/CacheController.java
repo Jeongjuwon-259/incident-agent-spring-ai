@@ -32,9 +32,6 @@ public class CacheController {
     public ResponseEntity<CacheEntryView> register(@Valid @RequestBody CacheEntryRequest request) {
         var registered = cacheService.register(request.question(), request.sql(), request.parameters(),
                 request.verifiedBy(), request.notes());
-        return ResponseEntity.status(HttpStatus.CREATED).body(new CacheEntryView(
-                registered.id(), registered.question(), registered.sql(), registered.tables(),
-                registered.defaultParams(), registered.verifiedBy(), registered.notes(), 0,
-                java.time.Instant.now()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(WebMapper.toCacheView(registered));
     }
 }

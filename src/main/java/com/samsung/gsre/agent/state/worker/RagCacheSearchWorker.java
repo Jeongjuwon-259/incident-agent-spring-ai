@@ -33,9 +33,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RagCacheSearchWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final VerifiedSqlCacheService cacheService;
     private final AgentProperties props;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 후보 검색
+    // ==================================================================
 
     public StageOutcome search(PipelineContext ctx) {
         long started = System.nanoTime();

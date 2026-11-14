@@ -23,6 +23,7 @@ import com.samsung.gsre.agent.model.SqlOrigin;
 import com.samsung.gsre.agent.nl2sql.heuristic.HeuristicAnswerComposer;
 import com.samsung.gsre.agent.nl2sql.heuristic.HeuristicQueryPlanner;
 import com.samsung.gsre.agent.nl2sql.heuristic.HeuristicSqlTemplates;
+import com.samsung.gsre.agent.security.mask.SensitiveDataMasker;
 import java.time.Instant;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
@@ -203,14 +204,15 @@ public class SpringAiLlmGateway implements LlmGateway {
                     purpose,
                     provider(),
                     model,
-                    JsonSupport.truncate("[SYSTEM]\n" + prompt.system() + "\n[USER]\n" + prompt.user(), 8_000),
-                    JsonSupport.truncate(response, 8_000),
+                    SensitiveDataMasker.maskText(
+                            JsonSupport.truncate("[SYSTEM]\n" + prompt.system() + "\n[USER]\n" + prompt.user(), 8_000)),
+                    SensitiveDataMasker.maskText(JsonSupport.truncate(response, 8_000)),
                     latencyMs,
                     promptChars,
                     responseChars,
                     (promptChars + responseChars) / 3,
                     failure == null,
-                    failure == null ? null : failure.getMessage(),
+                    failure == null ? null : SensitiveDataMasker.maskText(failure.getMessage()),
                     Instant.now()));
         }
     }

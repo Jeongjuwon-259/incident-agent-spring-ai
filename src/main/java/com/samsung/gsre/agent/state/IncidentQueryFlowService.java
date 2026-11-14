@@ -2,6 +2,8 @@ package com.samsung.gsre.agent.state;
 
 import com.samsung.gsre.agent.audit.repository.AuditRepository;
 import com.samsung.gsre.agent.audit.repository.ConversationStore;
+import com.samsung.gsre.agent.common.constant.AgentConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.llm.AgentRunScope;
 import com.samsung.gsre.agent.llm.exception.LlmException;
@@ -16,7 +18,6 @@ import com.samsung.gsre.agent.state.worker.SqlCompileWorker;
 import com.samsung.gsre.agent.state.worker.SqlExecutionWorker;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ThreadLocalRandom;
@@ -49,11 +50,10 @@ import org.springframework.stereotype.Service;
 public class IncidentQueryFlowService {
 
     // ==================================================================
-    // 상단: 흐름 기준정보 (바꾸려면 application.yml 의 agent.* 참고)
+    // 상단 (INPUT) — 흐름 기준정보 (바꾸려면 application.yml 의 agent.* 참고)
     // ==================================================================
     /** 안전장치: 한 질의에서 흐름을 도는 최대 횟수 */
-    private static final int MAX_FLOW_ITERATIONS = 30;
-    private static final DateTimeFormatter RUN_ID_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+    private static final int MAX_FLOW_ITERATIONS = AgentConstants.DEFAULT_MAX_FLOW_ITERATIONS;
 
     private final AgentProperties props;
     private final QueryUnderstandingWorker queryUnderstandingWorker;
@@ -67,7 +67,7 @@ public class IncidentQueryFlowService {
     private final Environment environment;
 
     // ==================================================================
-    // 중단: 6단계 처리 흐름
+    // 중단 (PROCESS) — 6단계 처리 흐름
     // ==================================================================
 
     public PipelineResult handle(String userId, String channel, String sessionId, String question) {
@@ -134,15 +134,15 @@ public class IncidentQueryFlowService {
     }
 
     // ==================================================================
-    // 하단: 결과 상태 · 실행 종료 처리
+    // 하단 (OUTPUT) — 결과 상태 · 실행 종료 처리
     // ==================================================================
 
     private PipelineContext start(AgentQueryCommand command) {
-        String sessionId = command.sessionId() == null || command.sessionId().isBlank()
-                ? "SESSION-" + System.nanoTime() : command.sessionId();
-        String userId = command.userId() == null || command.userId().isBlank() ? "anonymous" : command.userId();
-        String channel = command.channel() == null || command.channel().isBlank() ? "WEB" : command.channel();
-        String question = command.question() == null ? "" : command.question().strip();
+        String sessionId = ValidationUtils.orDefault(command.sessionId(),
+                AgentConstants.SESSION_ID_PREFIX + System.nanoTime());
+        String userId = ValidationUtils.orDefault(command.userId(), AgentConstants.ANONYMOUS_USER);
+        String channel = ValidationUtils.orDefault(command.channel(), AgentConstants.DEFAULT_CHANNEL);
+        String question = ValidationUtils.orDefault(command.question(), "").strip();
 
         PipelineContext ctx = new PipelineContext(nextRunId(), userId, channel, sessionId, question);
         ctx.setHistory(conversationStore.recentTurns(sessionId, props.getPipeline().getHistoryTurns()));
@@ -200,7 +200,8 @@ public class IncidentQueryFlowService {
     }
 
     private String llmUnavailableMessage() {
-        String baseUrl = environment.getProperty("spring.ai.openai.base-url", "http://localhost:11434/v1");
+        String baseUrl = environment.getProperty("spring.ai.openai.base-url",
+                AgentConstants.DEFAULT_LOCAL_LLM_BASE_URL);
         return "로컬 LLM 에 연결하지 못해 조회를 시작하지 못했습니다. "
                 + "Mac mini 의 모델 서버(Ollama/vLLM/llama.cpp)가 실행 중인지, "
                 + "LOCAL_LLM_BASE_URL(현재 " + baseUrl + ")이 맞는지 확인해 주세요. "
@@ -208,7 +209,8 @@ public class IncidentQueryFlowService {
     }
 
     private String nextRunId() {
-        return "RUN-" + java.time.LocalDateTime.now().format(RUN_ID_FORMAT) + "-"
+        return AgentConstants.RUN_ID_PREFIX
+                + java.time.LocalDateTime.now().format(AgentConstants.ID_TIMESTAMP_FORMAT) + "-"
                 + String.format(Locale.ROOT, "%04X", ThreadLocalRandom.current().nextInt(0xFFFF));
     }
 }

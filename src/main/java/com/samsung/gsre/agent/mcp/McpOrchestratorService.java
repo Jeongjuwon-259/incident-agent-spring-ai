@@ -2,6 +2,9 @@ package com.samsung.gsre.agent.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.samsung.gsre.agent.common.constant.AgentConstants;
+import com.samsung.gsre.agent.common.constant.McpConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.mcp.exception.McpApiNotFoundException;
 import com.samsung.gsre.agent.mcp.repository.McpMasterRepository;
@@ -12,8 +15,10 @@ import com.samsung.gsre.agent.mcp.reshaping.DataReshaper;
 import com.samsung.gsre.agent.mcp.reshaping.ReshapingResult;
 import com.samsung.gsre.agent.mcp.transport.McpCallResult;
 import com.samsung.gsre.agent.mcp.transport.McpClientGateway;
-import com.samsung.gsre.agent.mcp.transport.McpHttpMethod;
 import com.samsung.gsre.agent.mcp.transport.RestApiClientGateway;
+import com.samsung.gsre.agent.mcp.validation.McpApiRegistrationValidator;
+import com.samsung.gsre.agent.security.mask.SensitiveDataMasker;
+import com.samsung.gsre.agent.security.net.OutboundTargetPolicy;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -29,17 +34,28 @@ import org.springframework.stereotype.Service;
  * [2] 요청 Reshaping  INBOUND: DB 로우 → MCP 스펙/REST 본문 / OUTBOUND: 호출 파라미터 정리
  * [3] 통신            transport_type 이 REST 면 RestApiClientGateway, 나머지는 McpClientGateway
  * [4] 응답 Reshaping  Raw 응답 → 필요한 필드만 남긴 압축 JSON
- * [5] 감사로그        raw/reshaped + 실제 프로토콜·메서드를 한 행에 남긴다 (실패 포함)
+ * [5] 감사로그        raw/reshaped + 실제 프로토콜·메서드를 한 행에 남긴다 (실패 포함, 시크릿·PII 마스킹)
  * </pre>
  *
  * <p>JSONPath 해석은 {@link DataReshaper}, HTTP 는 {@link McpClientGateway}·{@link RestApiClientGateway},
- * 원천 SELECT 는 {@link McpSourceQueryReader} 가 맡는다. 새 도구를 추가할 때 이 파일은 고치지 않는다.
- * 프로토콜 선택조차 {@code transport_type} 값으로 결정되므로 코드 분기는 두 게이트웨이 호출 한 줄뿐이다.</p>
+ * 원천 SELECT 는 {@link McpSourceQueryReader}, 등록 검증은 {@link McpApiRegistrationValidator} 가 맡는다.
+ * 새 도구를 추가할 때 이 파일은 고치지 않는다.</p>
+ *
+ * <h2>IPO 배치</h2>
+ * <ul>
+ *   <li>상단: 의존성(기준정보를 읽는 창구)</li>
+ *   <li>중단: 등록·조회·실행 흐름과 단계별 가공</li>
+ *   <li>하단: 감사 로그 1행 조립, 응답 조립, 로그 크기 보호</li>
+ * </ul>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class McpOrchestratorService {
+
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
 
     private final McpMasterRepository masterRepository;
     private final McpPayloadLogRepository logRepository;
@@ -47,12 +63,14 @@ public class McpOrchestratorService {
     private final McpClientGateway gateway;
     private final RestApiClientGateway restGateway;
     private final DataReshaper reshaper;
+    private final McpApiRegistrationValidator registrationValidator;
+    private final OutboundTargetPolicy targetPolicy;
     private final ObjectMapper objectMapper;
     private final AgentProperties props;
 
-    // ------------------------------------------------------------------
-    // 기준정보 (등록/조회)
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 중단 (PROCESS) — 기준정보(등록/조회)
+    // ==================================================================
 
     public List<McpApiMaster> apis() {
         return masterRepository.findAll();
@@ -62,21 +80,24 @@ public class McpOrchestratorService {
         return masterRepository.findById(apiId).orElseThrow(() -> new McpApiNotFoundException(apiId));
     }
 
-    /** 새 MCP/REST 도구 등록. 룰 JSON 문법은 등록 시점에 검증해 잘못된 룰이 실행 때 터지지 않게 한다. */
+    /** 새 MCP/REST 도구 등록. 룰 문법·인증 설정·엔드포인트 정책을 등록 시점에 검증한다. */
     public McpApiMaster register(McpApiMaster api) {
-        validate(api);
-        if (masterRepository.findById(api.apiId()).isPresent()) {
-            throw new IllegalArgumentException("이미 등록된 MCP API 입니다: " + api.apiId());
-        }
+        registrationValidator.validate(api);
+        ValidationUtils.requireTrue(masterRepository.findById(api.apiId()).isEmpty(),
+                "이미 등록된 MCP API 입니다: " + api.apiId());
         masterRepository.insert(api);
         log.info("[mcp] API 등록 apiId={} direction={} transport={} method={} tool={}",
                 api.apiId(), api.direction(), api.transportType(), api.httpMethod(), api.toolName());
         return masterRepository.findById(api.apiId()).orElse(api);
     }
 
-    // ------------------------------------------------------------------
-    // 실행 (IPO)
-    // ------------------------------------------------------------------
+    public List<McpPayloadLog> logs(String apiId, int limit) {
+        return logRepository.findRecent(apiId, limit);
+    }
+
+    // ==================================================================
+    // 중단 (PROCESS) — 실행 (IPO 5단계)
+    // ==================================================================
 
     public McpExecutionResult execute(String apiId, Map<String, Object> params, String runId, String requestedBy) {
         // [1] 기준정보 로드 — 등록 테이블이 유일한 진실이다.
@@ -87,6 +108,9 @@ public class McpOrchestratorService {
                 + (api.isRestTransport() ? ", " + api.httpMethod() : "") + ")");
 
         try {
+            // 테이블은 API 밖에서도 수정될 수 있으므로 전송 직전에 네트워크 정책을 다시 확인한다.
+            targetPolicy.verify(api.endpointUrl());
+
             // [2] 요청 Reshaping — 내부 로우(INBOUND) 또는 호출 파라미터(OUTBOUND)를 전송 규격으로.
             JsonNode request = shapeRequest(api, ctx);
             ctx.requestPayload(request);
@@ -115,13 +139,9 @@ public class McpOrchestratorService {
         return toResult(ctx);
     }
 
-    public List<McpPayloadLog> logs(String apiId, int limit) {
-        return logRepository.findRecent(apiId, limit);
-    }
-
-    // ------------------------------------------------------------------
-    // 단계별 세부 (여기부터는 "무슨 일을 하는가" 보다 "어떻게" 의 영역)
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 중단 (PROCESS) — 단계별 세부 ("무엇을" 보다 "어떻게")
+    // ==================================================================
 
     /** 전송 프로토콜 분기. 이 한 줄이 "테이블 값으로 REST/MCP 를 모두 돌린다" 의 전부다. */
     private McpCallResult call(McpApiMaster api, JsonNode request, Map<String, Object> params) {
@@ -174,22 +194,26 @@ public class McpOrchestratorService {
         return shaped.droppedCount() > 0 ? ", 제외 " + shaped.droppedCount() + "건" : "";
     }
 
+    // ==================================================================
+    // 하단 (OUTPUT) — 감사 로그 1행 · 응답 조립 · 크기 보호
+    // ==================================================================
+
     private long persist(McpExecutionContext ctx) {
         McpApiMaster api = ctx.getApi();
         try {
             McpPayloadLog row = new McpPayloadLog(
-                    -1,
+                    McpConstants.LOG_ID_NONE,
                     ctx.getCallId(),
                     ctx.getRunId(),
                     api.apiId(),
                     api.direction().name(),
-                    truncate(ctx.getRawIn()),
-                    truncate(writeJson(ctx.getRequestPayload())),
-                    truncate(ctx.getRawOut()),
-                    truncate(writeJson(ctx.getResponsePayload())),
+                    payloadText(ctx.getRawIn()),
+                    payloadText(writeJson(ctx.getRequestPayload())),
+                    payloadText(ctx.getRawOut()),
+                    payloadText(writeJson(ctx.getResponsePayload())),
                     ctx.getStatusCode(),
                     ctx.durationMs(),
-                    errorText(ctx),
+                    maskMessage(errorText(ctx)),
                     Instant.now(),
                     api.transportType(),
                     api.isRestTransport() ? api.httpMethod() : null);
@@ -227,67 +251,27 @@ public class McpOrchestratorService {
                 ctx.status(),
                 ctx.getStatusCode(),
                 ctx.durationMs(),
-                ctx.getRequestPayload(),
-                ctx.getResponsePayload(),
-                List.copyOf(ctx.getStages()),
-                List.copyOf(ctx.getWarnings()),
-                errorText(ctx));
+                SensitiveDataMasker.mask(ctx.getRequestPayload()),
+                SensitiveDataMasker.mask(ctx.getResponsePayload()),
+                ctx.getStages().stream().map(SensitiveDataMasker::maskText).toList(),
+                ctx.getWarnings().stream().map(SensitiveDataMasker::maskText).toList(),
+                maskMessage(errorText(ctx)));
     }
 
-    private void validate(McpApiMaster api) {
-        if (api.apiId() == null || api.apiId().isBlank()) {
-            throw new IllegalArgumentException("apiId 는 필수입니다.");
-        }
-        if (api.toolName() == null || api.toolName().isBlank()) {
-            throw new IllegalArgumentException("toolName 은 필수입니다.");
-        }
-        if (api.endpointUrl() == null || !api.endpointUrl().matches("(?i)^https?://.+")) {
-            throw new IllegalArgumentException("endpointUrl 은 http(s):// 로 시작해야 합니다.");
-        }
-        if (api.direction().readsSourceRows() && !api.hasSourceQuery()) {
-            throw new IllegalArgumentException(
-                    api.direction() + " 방향은 source_query(내부 원천 SELECT)가 필요합니다.");
-        }
-        if (api.hasRequestRule()) {
-            reshaper.parse(api.requestReshapingRule());
-        }
-        if (api.hasResponseRule()) {
-            reshaper.parse(api.responseReshapingRule());
-        }
-        if (api.isRestTransport()) {
-            validateRestShape(api);
-        }
+    /** 저장 전에 시크릿·PII 를 지운 뒤 자른다. (자른 뒤 지우면 경계에서 잘린 값이 남을 수 있다) */
+    private String payloadText(String value) {
+        return truncate(SensitiveDataMasker.maskJson(value));
     }
 
-    /** REST 등록 검증: 메서드·헤더가 해석 가능한지, 경로변수와 GET/DELETE 본문 규칙이 맞는지. */
-    private void validateRestShape(McpApiMaster api) {
-        McpHttpMethod method = api.httpMethodValue(); // 잘못된 메서드면 여기서 IllegalArgumentException(400)
-        if (api.hasHeadersConfig()) {
-            try {
-                JsonNode headers = objectMapper.readTree(api.headersConfig());
-                if (headers == null || !headers.isObject()) {
-                    throw new IllegalArgumentException("headersConfig 는 JSON 객체여야 합니다: " + api.apiId());
-                }
-            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-                throw new IllegalArgumentException("headersConfig JSON 을 해석하지 못했습니다: "
-                        + api.apiId() + " (" + e.getOriginalMessage() + ")");
-            }
-        }
-        if (api.direction().readsSourceRows() && !method.hasBody()) {
-            throw new IllegalArgumentException(method + " 메서드는 본문을 보내지 않으므로 " + api.direction()
-                    + " 방향에 쓸 수 없습니다. POST/PUT/PATCH 중 하나를 지정하세요: " + api.apiId());
-        }
+    private String maskMessage(String value) {
+        return SensitiveDataMasker.maskText(value);
     }
-
-    // ------------------------------------------------------------------
-    // 로그 크기 보호
-    // ------------------------------------------------------------------
 
     private String truncate(String value) {
         if (value == null) {
             return null;
         }
-        int max = Math.max(500, props.getMcp().getMaxLogPayloadChars());
+        int max = Math.max(AgentConstants.MIN_LOG_PAYLOAD_CHARS, props.getMcp().getMaxLogPayloadChars());
         if (value.length() <= max) {
             return value;
         }
@@ -298,7 +282,9 @@ public class McpOrchestratorService {
         if (value == null) {
             return null;
         }
-        return value.length() <= 1_000 ? value : value.substring(0, 1_000);
+        return value.length() <= AgentConstants.DEFAULT_LOG_MESSAGE_MAX_CHARS
+                ? value
+                : value.substring(0, AgentConstants.DEFAULT_LOG_MESSAGE_MAX_CHARS);
     }
 
     private String writeJson(JsonNode node) {

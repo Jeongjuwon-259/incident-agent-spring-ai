@@ -1,8 +1,10 @@
 package com.samsung.gsre.agent.audit.repository;
 
+import com.samsung.gsre.agent.common.constant.AgentConstants;
 import com.samsung.gsre.agent.llm.AgentRunScope;
 import com.samsung.gsre.agent.llm.support.LlmCallRecord;
 import com.samsung.gsre.agent.llm.support.LlmCallRecorder;
+import com.samsung.gsre.agent.security.mask.SensitiveDataMasker;
 import com.samsung.gsre.agent.state.PipelineContext;
 import com.samsung.gsre.agent.state.trace.TraceStep;
 import java.util.List;
@@ -32,7 +34,8 @@ public class AuditRepository implements LlmCallRecorder {
                                        duration_ms, started_at)
                 VALUES (?, ?, ?, ?, ?, ?, FALSE, 0, 0, 0, 0, ?)
                 """, ctx.getRunId(), ctx.getUserId(), ctx.getChannel(), ctx.getSessionId(),
-                truncate(ctx.getQuestion(), 2000), ctx.getStatus().name(),
+                truncate(SensitiveDataMasker.maskText(ctx.getQuestion()),
+                        AgentConstants.DEFAULT_RUN_QUESTION_MAX_CHARS), ctx.getStatus().name(),
                 java.sql.Timestamp.from(ctx.getStartedAt()));
     }
 
@@ -43,9 +46,10 @@ public class AuditRepository implements LlmCallRecorder {
                        iteration_count = ?, duration_ms = ?, error_message = ?, finished_at = ?
                  WHERE run_id = ?
                 """, ctx.getStatus().name(),
-                ctx.getAnswer() == null ? null : ctx.getAnswer().answer(),
+                ctx.getAnswer() == null ? null : SensitiveDataMasker.maskText(ctx.getAnswer().answer()),
                 ctx.cacheHit(), ctx.getExecutionCount(), llmCalls, ctx.getExtraRounds() + 1,
-                ctx.getDurationMs(), truncate(ctx.getErrorMessage(), 1000),
+                ctx.getDurationMs(), truncate(SensitiveDataMasker.maskText(ctx.getErrorMessage()),
+                        AgentConstants.DEFAULT_LOG_MESSAGE_MAX_CHARS),
                 java.sql.Timestamp.from(java.time.Instant.now()), ctx.getRunId());
     }
 
@@ -54,7 +58,7 @@ public class AuditRepository implements LlmCallRecorder {
                 INSERT INTO agent_run_step (run_id, seq_no, stage, summary, detail, latency_ms)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, runId, step.seq(), step.stage().name(), truncate(step.summary(), 500),
-                step.detail(), step.latencyMs());
+                SensitiveDataMasker.maskText(step.detail()), step.latencyMs());
     }
 
     @Override
@@ -67,7 +71,8 @@ public class AuditRepository implements LlmCallRecorder {
                 """, call.runId() == null ? AgentRunScope.currentRunId() : call.runId(),
                 call.purpose(), call.provider(), call.model(), call.prompt(), call.response(),
                 call.latencyMs(), call.promptChars(), call.responseChars(), call.estimatedTokens(),
-                call.success(), truncate(call.errorMessage(), 1000));
+                call.success(), truncate(SensitiveDataMasker.maskText(call.errorMessage()),
+                        AgentConstants.DEFAULT_LOG_MESSAGE_MAX_CHARS));
     }
 
     public List<Map<String, Object>> findRun(String runId) {

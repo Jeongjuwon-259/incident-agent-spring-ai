@@ -11,6 +11,7 @@ import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.mcp.exception.ReshapingException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -37,6 +38,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class DataReshaper {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(JSONPath 설정)와 의존성
+    // ==================================================================
+
     private final ObjectMapper mapper;
     private final Configuration jsonPathConfig;
 
@@ -49,13 +54,17 @@ public class DataReshaper {
                 .build();
     }
 
+    // ==================================================================
+    // 중단 (PROCESS) — 룰 파싱 → 방향별 매핑
+    // ==================================================================
+
     public ReshapingRule parse(String ruleJson) {
         return ReshapingRule.parse(ruleJson);
     }
 
     /** 룰 문자열을 그대로 받는 진입점. 룰이 비면 원본을 그대로 돌려준다(경고 1건). */
     public ReshapingResult reshape(String ruleJson, Object raw, String fallbackToolName) {
-        if (ruleJson == null || ruleJson.isBlank()) {
+        if (ValidationUtils.isBlank(ruleJson)) {
             return new ReshapingResult(toNode(raw), 1, 1, 0,
                     List.of("Reshaping 룰이 없어 원본 payload 를 그대로 사용했습니다."));
         }
@@ -107,9 +116,10 @@ public class DataReshaper {
         return new ReshapingResult(payload, sourceCount, targetCount, dropped, List.copyOf(warnings));
     }
 
-    // ------------------------------------------------------------------
-    // 매핑
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 하단 (OUTPUT) — 매핑·변환·필터·JSON 결과 유틸
+    // ==================================================================
+
 
     private ObjectNode mapObject(JsonNode scope, List<ReshapingRule.FieldRule> fields, boolean dropNull,
                                  List<String> warnings) {
@@ -173,18 +183,9 @@ public class DataReshaper {
         if (envelope.attributes() != null && envelope.attributes().isObject()) {
             body.setAll((ObjectNode) envelope.attributes());
         }
-        String key = firstNonBlank(envelope.payloadKey(), envelope.argumentsKey(), "payload");
+        String key = ValidationUtils.firstNonBlank(envelope.payloadKey(), envelope.argumentsKey(), "payload");
         body.set(key, payload);
         return body;
-    }
-
-    private String firstNonBlank(String... candidates) {
-        for (String candidate : candidates) {
-            if (candidate != null && !candidate.isBlank()) {
-                return candidate;
-            }
-        }
-        return null;
     }
 
     // ------------------------------------------------------------------

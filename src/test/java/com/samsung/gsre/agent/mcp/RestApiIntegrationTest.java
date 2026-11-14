@@ -18,6 +18,7 @@ import com.samsung.gsre.agent.mcp.reshaping.ReshapingResult;
 import com.samsung.gsre.agent.mcp.transport.McpCallResult;
 import com.samsung.gsre.agent.mcp.transport.McpHttpMethod;
 import com.samsung.gsre.agent.mcp.transport.RestApiClientGateway;
+import com.samsung.gsre.agent.security.net.OutboundTargetPolicy;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -429,7 +430,7 @@ class RestApiIntegrationTest {
     void restOfflineFixtureIsDeterministic() {
         AgentProperties props = new AgentProperties();
         props.getMcp().setTransportMode("OFFLINE");
-        RestApiClientGateway offlineGateway = new RestApiClientGateway(objectMapper, props, fixtures);
+        RestApiClientGateway offlineGateway = new RestApiClientGateway(objectMapper, props, fixtures, new OutboundTargetPolicy(props));
 
         McpApiMaster api = masterRepository.findActive("REST-CMDB-001").orElseThrow();
         McpCallResult first = offlineGateway.call(api, objectMapper.createObjectNode(), Map.of());

@@ -1,4 +1,4 @@
-package com.samsung.gsre.agent.gateway;
+package com.samsung.gsre.agent.gateway.guard;
 
 import java.util.List;
 

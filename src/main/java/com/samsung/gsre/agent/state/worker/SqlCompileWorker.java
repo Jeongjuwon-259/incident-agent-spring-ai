@@ -36,8 +36,16 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class SqlCompileWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final LlmGateway llmGateway;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — SQL 준비
+    // ==================================================================
 
     public StageOutcome compile(PipelineContext ctx) {
         long started = System.nanoTime();

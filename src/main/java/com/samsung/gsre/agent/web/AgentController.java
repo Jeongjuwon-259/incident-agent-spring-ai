@@ -1,6 +1,7 @@
 package com.samsung.gsre.agent.web;
 
 import com.samsung.gsre.agent.audit.repository.AuditRepository;
+import com.samsung.gsre.agent.common.constant.AgentConstants;
 import com.samsung.gsre.agent.state.AgentQueryCommand;
 import com.samsung.gsre.agent.state.IncidentQueryFlowService;
 import com.samsung.gsre.agent.state.PipelineResult;
@@ -53,6 +54,7 @@ public class AgentController {
     @GetMapping("/runs")
     public List<Map<String, Object>> runs(@RequestParam String sessionId,
                                           @RequestParam(defaultValue = "20") int limit) {
-        return auditRepository.findRunsBySession(sessionId, Math.min(Math.max(limit, 1), 100));
+        return auditRepository.findRunsBySession(sessionId,
+                Math.min(Math.max(limit, 1), AgentConstants.MAX_PAGE_SIZE));
     }
 }

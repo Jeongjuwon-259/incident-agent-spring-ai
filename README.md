@@ -6,7 +6,7 @@ G-SRE 서비스맵 포털 **장애 지원 AI Agent** — Java 21 / Spring Boot 3
 
 - Flowise/LangGraph 없이 **Java 코드로 흐름을 명시적으로 제어**합니다.
 - Mac mini 로컬 LLM(Ollama, vLLM, llama.cpp, LM Studio, Qwen, Muse …)을 **OpenAI 호환 엔드포인트**로 붙입니다. 주소/모델은 환경변수 한 줄로 교체됩니다.
-- 모델이 없어도 `AGENT_LLM_MODE=offline` 으로 **전체 파이프라인·감사로그·품질평가가 끝까지 동작**합니다 (규칙 기반 결정적 구현). 테스트 50개가 이 모드로 실행됩니다.
+- 모델이 없어도 `AGENT_LLM_MODE=offline` 으로 **전체 파이프라인·감사로그·품질평가가 끝까지 동작**합니다 (규칙 기반 결정적 구현). 테스트 75개가 이 모드로 실행됩니다.
 - **REST API + MCP 통합 확장**: 같은 테이블(`svcm_tb_mcp_api_master`)의 `transport_type`/`http_method` 값만으로 MCP(tools/call)와 순수 REST(GET/POST/PUT/PATCH/DELETE)를 함께 구동합니다. ([§16](#16-rest-api--mcp-테이블-기반-통합-확장-2026-11-14-추가))
 - H2 임베디드 DB + 시드 데이터(8대 테이블, 검증 SQL 6건, 골든셋 6건)로 받자마자 확인 가능합니다.
 - **MCP API 확장**: 테이블 등록만으로 외부 도구를 늘리고, 선언적 JSONPath 룰로 요청/응답을 양방향 Reshaping 합니다. ([§15](#15-mcp-api-확장과-양방향-reshaping-2026-11-13-추가))
@@ -176,6 +176,7 @@ com.samsung.gsre.agent
 │   ├── transport       McpClientGateway(tools/call), RestApiClientGateway(http_method), McpAuthHeaders, McpCallResult
 │   ├── reshaping       DataReshaper(JSONPath 룰 엔진), ReshapingRule/ReshapingResult
 │   ├── repository      McpMasterRepository, McpPayloadLogRepository, McpPayloadLog, McpSourceQueryReader(INBOUND 원천)
+│   ├── validation      McpApiRegistrationValidator(등록 검증), SourceQueryValidator(읽기 전용 SELECT)
 │   ├── fixture         McpFixtureCatalog(오프라인 결정적 응답)
 │   └── exception       McpApiNotFoundException, McpTransportException, ReshapingException
 ├── llm                 LlmGateway(계약), AgentRunScope(호출 예산)
@@ -189,11 +190,20 @@ com.samsung.gsre.agent
 ├── nl2sql              SchemaCatalog(8대 메타데이터)
 │   ├── heuristic       HeuristicQueryPlanner/SqlTemplates/AnswerComposer
 │   └── metadata        TableMetadata, ColumnMetadata, JoinHint
-├── gateway             SqlGuard(안전 검증), DbExecutor(JDBC), SelfRepairEngine(재시도 루프), GuardVerdict
+├── gateway             SelfRepairEngine(검증→실행→복구 루프)
+│   ├── guard           SqlGuard(안전 검증), GuardVerdict
+│   ├── jdbc            DbExecutor(JDBC 실행·정규화)
+│   ├── mask            PiiMasker(조회 결과 PII 마스킹)
 │   └── exception       SqlExecutionException
 ├── eval                EvalService(배치), EvalBatch/EvalCaseResult/EvalTestCase
 │   ├── metric          ResultSetComparator(EX), HeuristicJudge(AA/FN)
 │   └── repository      EvalRepository
+├── common              공통 검증·고정 상수 (업무 소스에 if/문자열을 흩지 않는다)
+│   ├── validation      ValidationUtils, ValidationException
+│   └── constant        AgentConstants, McpConstants, SecurityConstants, SqlConstants
+├── security            보안 경계
+│   ├── mask            SensitiveDataMasker(로그·응답 시크릿/PII)
+│   └── net             OutboundTargetPolicy(SSRF·리다이렉트·대역 정책)
 ├── audit
 │   └── repository      AuditRepository(실행/단계/LLM 이력), ConversationStore(멀티턴)
 ├── config              AgentProperties(정책), ChatClientConfig(로컬 LLM), AsyncConfig
@@ -207,6 +217,9 @@ com.samsung.gsre.agent
 
 - 패키지를 나눠도 **공개 API 는 그대로**입니다. 컨트롤러 URL·DB 스키마·JSON 응답 규격·오류 코드는 이동 전과 같고,
   이동으로 필요해진 클래스만 `public` 으로 열었습니다.
+- **검증·상수 공통화**: 반복되는 널/공백/존재/범위 검증은 `common/validation/ValidationUtils`,
+  타임아웃·임계치·프로토콜/헤더명·포맷·허용목록은 `common/constant/*` 로 모읍니다. 업무 소스에 검증 `if` 문을
+  다시 흩어 놓지 않습니다. (상세: [§18](#18-폴더코드-구성-규칙과-llm-인수인계-2026-11-14-추가))
 
 ---
 
@@ -344,6 +357,14 @@ GET  /api/v1/eval/cases/{tcId}/history        # 동일 TC 과거 평가 이력
 - **PII 마스킹**: 이메일 `ki***@domain`, 연락처 `010-****-5678`, 사번 `S1****`.
 - **검증 SQL 등록**은 검증자 필수 + 가드 통과.
 - 모든 SQL 은 단일 실행기(`DbExecutor`)를 통과하며 쿼리 타임아웃(5초)이 걸립니다.
+- **묵시적 조인 금지**: `FROM a, b` 는 두 번째 테이블이 허용목록 검사를 우회할 수 있어 차단합니다. `JOIN` 을 명시하세요.
+- **원천 SELECT**: `source_query` 는 읽기 전용 단일 SELECT 만. 주석·세미콜론·변경/실행 키워드(`INTO`, `CALL`, `RUNSCRIPT` …) 금지.
+- **시크릿/PII 마스킹**: 감사 로그·LLM 호출 기록·API 응답의 payload 는 `SensitiveDataMasker` 를 거칩니다.
+  `Bearer` 토큰, `*token*/*secret*/*password*/*apiKey*` 키, 이메일·전화번호·주민등록번호가 대상입니다.
+- **SSRF 방어**: 외부 호출은 `OutboundTargetPolicy` 를 **등록 시점 + 전송 직전** 2회 통과합니다.
+  http(s)만, URL 사용자정보 금지, 리다이렉트 금지, 메타데이터/링크로컬 주소 항상 차단.
+  운영에서는 `AGENT_MCP_ALLOW_LOCAL_ENDPOINTS=false` + `AGENT_MCP_ALLOWED_HOSTS` 를 지정하세요.
+- **헤더 주입 방지**: `headers_config` 값의 CR/LF 금지, 인증 헤더는 `auth_config`(환경변수 이름)로만.
 
 ---
 
@@ -387,7 +408,7 @@ mvn test
 
 | 테스트 | 검증 내용 |
 |---|---|
-| `SqlGuardTest` (7) | SELECT 전용, 허용 테이블, 사용자 마스터 `SELECT *`, 다중문장/주석, LIMIT 보정 |
+| `SqlGuardTest` (10) | SELECT 전용, 허용 테이블, CTE, 묵시적 조인, `SELECT INTO`, 사용자 마스터 `SELECT *`, 다중문장/주석, LIMIT 보정 |
 | `IncidentQueryFlowServiceTest` (4) | 6단계 답변, 캐시 재사용, 멀티턴 APP 승계, 감사 이력 저장 |
 | `SelfRepairEngineTest` (1) | 실행 오류 → 재생성 → 재실행 성공과 repair 이력 |
 | `EvalServiceTest` (2) | 배치 4지표 Pass/통과율, TC 이력 누적 |
@@ -396,8 +417,13 @@ mvn test
 | `ContextSmokeTest` (1) | 컨텍스트 기동 + 파이프라인 답변 |
 | `McpReshapingFlowTest` (16) | K8s Raw→Pod 압축, 로우→tools/call 변환, 필수필드/문법 오류, 3방향 실행·감사로그, 실제 HTTP/SSE 통신, 등록/실행/404/검증 |
 | `RestApiIntegrationTest` (12) | REST 시드 6건 조회, GET 경로변수·Query String·헤더 실통신, POST 순수 REST JSON, BIDIRECTIONAL webhook, PUT/DELETE/PATCH 메서드별 전송 형태, HTTP 500 비은폐, 오프라인 픽스처 결정성, 등록 검증 400 3종 |
+| `McpRegistrationSecurityTest` (5) | 시크릿 헤더·평문 auth 값·메타데이터 주소·미지원 전송 거부, 실행/로그 시크릿 마스킹 |
+| `SensitiveDataMaskerTest` (4) | JSON 키·Bearer/PII 텍스트 마스킹, 원본 불변 |
+| `OutboundTargetPolicyTest` (5) | 스킴·사용자정보·메타데이터·로컬 대역·허용목록 |
+| `SourceQueryValidatorTest` (4) | 읽기 전용 SELECT, 주석·다중문장·변경 키워드 거부 |
+| `ValidationUtilsTest` (4) | 공통 검증 계약 (필수값/존재/허용목록/기본값) |
 
-현재 **50개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
+현재 **75개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
 
 ---
 
@@ -827,9 +853,104 @@ curl -s -X POST http://localhost:8080/api/v1/mcp/apis -H 'Content-Type: applicat
 `VerifiedSqlCacheService`·`VerifiedSqlEntry`, `SchemaCatalog`, `SqlGuard`·`DbExecutor`·`SelfRepairEngine`·`GuardVerdict`,
 `EvalService`(및 배치·케이스 모델), 4개 Controller, `model/`의 공용 도메인 모델.
 
+> 이후 §18 작업에서 `SqlGuard`·`GuardVerdict` → `gateway/guard/`, `DbExecutor` → `gateway/jdbc/`,
+> `PiiMasker` → `gateway/mask/` 로 **한 단계 더** 내렸습니다. 현재 구조는 §3.4 와 §18.2 를 기준으로 봅니다.
+
 ### 17.3 검증
 
 - `mvn clean test` → **50개 전부 통과** (이동 전과 동일).
 - 앱 기동 후 공개 API 실측: `POST /api/v1/agent/query`(SUCCESS), `GET /api/v1/cache`, `GET /api/v1/mcp/apis`,
   `POST /api/v1/mcp/execute/REST-CMDB-001`(FALLBACK, 응답 정제 동일), `GET /api/v1/eval/cases`,
   미등록 API 호출 시 `404 {"code":"MCP_API_NOT_FOUND", ...}` — 이동 전과 같은 규격.
+
+---
+
+## 18. 폴더·코드 구성 규칙과 LLM 인수인계 (2026-11-14 추가)
+
+> 이 섹션은 **어떤 경로로 들어온 LLM/개발자도 같은 규칙으로 작업을 이어가기 위한 요약**입니다.
+> 상세 규칙서는 [`AGENTS.md`](AGENTS.md)(표준 지침)와 [`docs/CONVENTIONS_AND_HANDOFF.md`](docs/CONVENTIONS_AND_HANDOFF.md)(상세·예시)에 있습니다.
+
+### 18.1 5대 규칙
+
+| # | 규칙 | 한 줄 요약 | 확인할 파일 |
+|---|---|---|---|
+| 1 | MVC + 플로우/구현 분리 | Controller·Flow·Orchestrator 에는 시나리오만, SQL·HTTP·파싱은 Worker/Gateway/Reshaper/Repository | `IncidentQueryFlowService`, `McpOrchestratorService` |
+| 2 | 컨설팅형 IPO | 상단(INPUT: 상수·설정·의존성) → 중단(PROCESS: 단계 흐름) → 하단(OUTPUT: 결과 조립) | 모든 주요 클래스의 배너 |
+| 3 | 패키지 분리 | 상위 레벨 = 업무 흐름·도메인 모델, 패턴 소스 = 한 단계 아래 하위 패키지 | §3.4 트리 |
+| 4 | 테이블 기반 REST/MCP + 보안 | `svcm_tb_mcp_api_master` 행 1개로 도구 추가, 보안 위반은 거부 | §15·§16, `security/*` |
+| 5 | 검증·상수 공통화 | 반복 검증은 `ValidationUtils`, 고정 값은 `common/constant/*` | `common/` 패키지 |
+
+### 18.2 폴더 배치 (요약)
+
+```text
+common/validation   ValidationUtils(널·공백·존재·범위·형식), ValidationException
+common/constant     AgentConstants(기본값·ID 형식), McpConstants(전송·인증·헤더),
+                    SecurityConstants(마스킹·차단 주소), SqlConstants(금지 키워드·정책값)
+state/              IncidentQueryFlowService + worker/ + trace/
+mcp/                McpOrchestratorService + transport/ reshaping/ repository/ validation/ fixture/ exception/
+gateway/            SelfRepairEngine + guard/ jdbc/ mask/ exception/
+security/           mask/ SensitiveDataMasker, net/ OutboundTargetPolicy
+web/                Controller 4개 + dto/ mapper/ handler/
+```
+
+- 새 클래스 위치가 애매하면 `AGENTS.md` §4 결정표를 따른다.
+- **금지**: 흐름 클래스에 `SELECT`/`HttpRequest`/`JsonPath` 직접 작성, 업무 소스에 검증 `if` 더미, 같은 문자열을 두 곳에 상수로 선언.
+
+### 18.3 IPO 작성법 (복사해서 쓰는 골격)
+
+```java
+@Component
+@RequiredArgsConstructor
+public class XxxWorker {
+
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보: 상수·임계치·의존성
+    // ==================================================================
+    private static final int MAX_... = AgentConstants....;
+    private final SomeGateway gateway;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 단계별 가공 흐름 (읽는 순서 = 실행 순서)
+    // ==================================================================
+    public StageOutcome run(PipelineContext ctx) {
+        String value = ValidationUtils.requireText(ctx.getQuestion(), "question");
+        ...
+        return outcome(...);
+    }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — 결과 조립·유틸
+    // ==================================================================
+    private StageOutcome outcome(...) { ... }
+}
+```
+
+### 18.4 테이블 기반 REST/MCP 확장 (코드 수정 없음)
+
+1. `svcm_tb_mcp_api_master` 행 추가 (`POST /api/v1/mcp/apis` 또는 SQL).
+2. `direction`(OUTBOUND/INBOUND/BIDIRECTIONAL), `transport_type`(MCP/HTTP/SSE ↔ REST/REST_API), `http_method`,
+   `endpoint_url`, `auth_type`+`auth_config`(envVar), `headers_config`, 룰 2개, (INBOUND면) `source_query`.
+3. `POST /api/v1/mcp/execute/{apiId}` → `GET /api/v1/mcp/logs?apiId=...` 로 raw ↔ reshaped 확인.
+4. **코드에 도구별 `if` 를 추가하지 않는다.** 새 프로토콜만 게이트웨이 1개 + 분기 1줄.
+
+### 18.5 보안 규칙 (요약 체크리스트)
+
+- [ ] 시크릿은 `auth_config` 의 **환경변수 이름**으로만. `headers_config` 에 인증 헤더 금지.
+- [ ] 로그·감사·LLM 기록·API 응답은 `SensitiveDataMasker` 로 마스킹 (자르기 전에).
+- [ ] 외부 호출은 `OutboundTargetPolicy` 2회 통과. 운영은 `allow-local-endpoints=false` + `allowed-hosts`.
+- [ ] SQL 은 `SqlGuard`, 원천은 `SourceQueryValidator` 통과. 파라미터는 named parameter 만.
+- [ ] 리다이렉트 금지, 타임아웃 필수, 4xx/5xx 를 성공으로 덮지 않음.
+- [ ] API 는 사내 게이트웨이 뒤에 둔다 (자체 인증 없음).
+
+### 18.6 빌드·테스트
+
+```bash
+mvn clean test                                # 전체 75개 (필수 통과)
+AGENT_LLM_MODE=offline mvn spring-boot:run    # 모델 없이 데모
+```
+
+### 18.7 더 읽을 곳
+
+- [`AGENTS.md`](AGENTS.md) — 모든 코딩 에이전트가 먼저 읽는 표준 지침 (5대 규칙, 배치 결정표, 체크리스트)
+- [`docs/CONVENTIONS_AND_HANDOFF.md`](docs/CONVENTIONS_AND_HANDOFF.md) — 상세 규칙·IPO·보안·확장 절차·파일 인덱스·시작 프롬프트
+- [`docs/architecture.md`](docs/architecture.md) — 요청 생명주기, 단계별 책임, MCP/REST 어댑터, 패키지 규칙

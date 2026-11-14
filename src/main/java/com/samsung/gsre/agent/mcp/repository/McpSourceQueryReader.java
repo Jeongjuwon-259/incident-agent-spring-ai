@@ -3,6 +3,7 @@ package com.samsung.gsre.agent.mcp.repository;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.mcp.McpApiMaster;
 import com.samsung.gsre.agent.mcp.reshaping.DataReshaper;
+import com.samsung.gsre.agent.mcp.validation.SourceQueryValidator;
 import java.sql.Clob;
 import java.sql.ResultSetMetaData;
 import java.sql.Timestamp;
@@ -21,26 +22,43 @@ import org.springframework.stereotype.Component;
 /**
  * INBOUND 원천 데이터 리더: {@code svcm_tb_mcp_api_master.source_query} 를 실행해 내부 로우를 얻는다.
  *
- * <p>이 클래스가 "내부 DB" 와 "MCP 어댑터" 사이의 유일한 접점이다. 여기서 나온 로우는
- * 곧바로 {@link DataReshaper} 로 넘어가 외부 도구 규격(JSON)으로 재가공된다.</p>
+ * <h2>상단 (INPUT) — 기준정보</h2>
+ * <ul>
+ *   <li>원천 SQL 은 {@link SourceQueryValidator} 로 읽기 전용 단일 SELECT 임을 확인한다.</li>
+ *   <li>파라미터는 named parameter 로만 바인딩한다 (문자열 조립 금지).</li>
+ *   <li>행 수 상한은 {@code agent.mcp.max-source-rows}. SQL 에 LIMIT 이 없으면 상한+1 을 붙여
+ *       DB 가 무한정 행을 만들지 않게 한다.</li>
+ * </ul>
  *
- * <p>안전장치: SELECT/WITH 단일 문장만 허용하고, 파라미터는 named parameter 로만 바인딩한다.
- * 결과 행 수는 {@code agent.mcp.max-source-rows} 로 제한한다(로그·메모리 보호).</p>
+ * <h2>중단 (PROCESS) — 조회</h2>
+ * <ol>
+ *   <li>source_query 검증·정규화</li>
+ *   <li>파라미터 바인딩 후 실행, 컬럼명 소문자·JSON 친화 타입으로 정규화</li>
+ *   <li>상한 초과분 절단</li>
+ * </ol>
+ *
+ * <h2>하단 (OUTPUT) — 결과</h2>
+ * <p>{@code List<Map<String,Object>>} — 그대로 {@link DataReshaper} 의 입력이 된다.</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class McpSourceQueryReader {
 
-    private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*(select|with)\\b.*");
-    private static final Pattern WRITE_KEYWORD = Pattern.compile(
-            "(?i)\\b(insert|update|delete|merge|drop|alter|truncate|create|grant|revoke)\\b");
+    private static final Pattern LIMIT_CLAUSE = Pattern.compile("(?i)\\blimit\\b");
 
     private final NamedParameterJdbcTemplate jdbc;
     private final AgentProperties props;
+    private final SourceQueryValidator validator;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 조회
+    // ==================================================================
 
     public List<Map<String, Object>> read(McpApiMaster api, Map<String, Object> params) {
-        String sql = validate(api);
+        int maxRows = Math.max(1, props.getMcp().getMaxSourceRows());
+        String sql = limitGuarded(validator.validate(api), maxRows);
+
         MapSqlParameterSource source = new MapSqlParameterSource();
         if (params != null) {
             params.forEach(source::addValue);
@@ -55,7 +73,6 @@ public class McpSourceQueryReader {
             return row;
         });
 
-        int maxRows = Math.max(1, props.getMcp().getMaxSourceRows());
         if (rows.size() > maxRows) {
             log.warn("[mcp] 원천 행 수 상한 초과 apiId={} rows={} → {} 로 제한", api.apiId(), rows.size(), maxRows);
             return new ArrayList<>(rows.subList(0, maxRows));
@@ -64,25 +81,16 @@ public class McpSourceQueryReader {
         return rows;
     }
 
-    private String validate(McpApiMaster api) {
-        if (!api.hasSourceQuery()) {
-            throw new IllegalArgumentException(
-                    "INBOUND/BIDIRECTIONAL API 는 source_query 가 필요합니다: " + api.apiId());
+    // ==================================================================
+    // 하단 (OUTPUT) — 결과 정규화·행 상한
+    // ==================================================================
+
+    /** SQL 에 LIMIT 이 없으면 상한+1 을 붙인다. (초과 여부를 감지해 경고할 수 있게 1행 더 읽는다) */
+    private String limitGuarded(String sql, int maxRows) {
+        if (LIMIT_CLAUSE.matcher(sql).find()) {
+            return sql;
         }
-        String sql = api.sourceQuery().trim();
-        if (sql.endsWith(";")) {
-            sql = sql.substring(0, sql.length() - 1).trim();
-        }
-        if (sql.contains(";")) {
-            throw new IllegalArgumentException("source_query 는 단일 SELECT 문만 허용합니다: " + api.apiId());
-        }
-        if (!SELECT_ONLY.matcher(sql).matches()) {
-            throw new IllegalArgumentException("source_query 는 SELECT/WITH 로 시작해야 합니다: " + api.apiId());
-        }
-        if (WRITE_KEYWORD.matcher(sql).find()) {
-            throw new IllegalArgumentException("source_query 에 변경 구문 키워드가 있습니다: " + api.apiId());
-        }
-        return sql;
+        return sql + "\nLIMIT " + (maxRows + 1);
     }
 
     /** JSON 으로 나갈 값은 DB 타입 그대로 두면 지저분해진다. 날짜/CLOB 만 문자열로 정규화한다. */

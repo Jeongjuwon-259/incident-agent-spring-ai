@@ -156,8 +156,10 @@ McpExecutionResult (status, transportType, httpMethod, request, response, stages
 | `McpClientGateway` | 요청 조립(JSON-RPC), SSE/JSON 해석, 인증 헤더, 픽스처 폴백 | 어떤 필드를 쓸지 |
 | `RestApiClientGateway` | HTTP 메서드, 경로변수 치환, Query String, 커스텀 헤더, 픽스처 폴백 | 어떤 필드를 쓸지 |
 | `McpAuthHeaders` | 환경변수 기반 인증 헤더 해석 (두 게이트웨이 공용) | 시크릿 저장 |
+| `McpApiRegistrationValidator` | 등록 시점 검증 (전송/인증/헤더/룰/SSRF/원천 SELECT) | 통신, 실행 |
+| `SourceQueryValidator` | 원천 SELECT 읽기 전용·단일문장 검증 | 변환, 실행 |
 | `McpSourceQueryReader` | 원천 SELECT 실행·타입 정규화·행 수 상한 | 변환 |
-| `McpMasterRepository` / `McpPayloadLogRepository` | 테이블 CRUD | 판단 |
+| `McpMasterRepository` / `McpPayloadLogRepository` | 테이블 CRUD (로그는 마스킹 후 저장) | 판단 |
 
 ### 7.1 두 게이트웨이가 같고 다른 점
 
@@ -212,6 +214,8 @@ McpExecutionResult (status, transportType, httpMethod, request, response, stages
 | 벡터 저장소 | `SemanticSimilarity` 구현 교체 (pgvector/Redis/사내 RAGaaS) |
 | 감사 저장소 | `AuditRepository` 를 JDBC→Kafka/OpenSearch 로 교체 |
 | 인증/권한 | Controller 앞단 필터에서 userId/Scope 주입, `SqlGuard` 에 Scope 조건 추가 |
+| 새 공통 검증 | `common/validation/ValidationUtils` 에 이름 있는 메서드 추가 (업무 소스에 if 문 금지) |
+| 새 고정 상수 | `common/constant/*` 에 성격별로 추가하고 `application.yml`·README §10 동기화 |
 
 ## 9. 패키지 배치 규칙 (업무 소스 ↔ 패턴 소스 분리)
 
@@ -223,12 +227,32 @@ McpExecutionResult (status, transportType, httpMethod, request, response, stages
 | 핵심 도메인·상태 모델 | `<도메인>/`, `model/` | `PipelineContext`, `PipelineResult`, `McpApiMaster`, `QueryPlan` |
 | 단계별 처리 | `state/worker/` | `QueryUnderstandingWorker` … `AnswerGenerationWorker` |
 | 단계 이력 | `state/trace/` | `TraceRecorder`, `TraceStep` |
+| 공통 검증 | `common/validation/` | `ValidationUtils`, `ValidationException` |
+| 공통 상수 | `common/constant/` | `AgentConstants`, `McpConstants`, `SecurityConstants`, `SqlConstants` |
 | 예외 | `<도메인>/exception/` | `mcp/exception/*`, `llm/exception/LlmException`, `gateway/exception/SqlExecutionException` |
 | 전역 오류 응답 | `web/handler/` | `GlobalExceptionHandler` |
 | 통신 어댑터·인증 | `mcp/transport/` | `McpClientGateway`, `RestApiClientGateway`, `McpAuthHeaders` |
 | 변환·룰 엔진 | `mcp/reshaping/`, `llm/prompt/`, `web/mapper/` | `DataReshaper`, `PromptBuilder`, `WebMapper` |
+| 등록·입력 검증 | `mcp/validation/` | `McpApiRegistrationValidator`, `SourceQueryValidator` |
+| SQL 검증·실행·마스킹 | `gateway/guard/`, `gateway/jdbc/`, `gateway/mask/` | `SqlGuard`, `DbExecutor`, `PiiMasker` |
+| 로그 마스킹·외부 호출 정책 | `security/mask/`, `security/net/` | `SensitiveDataMasker`, `OutboundTargetPolicy` |
 | 리포지토리·원천 조회 | `<도메인>/repository/` | `McpMasterRepository`, `VerifiedSqlRepository`, `AuditRepository` |
 | 픽스처·시드 | `mcp/fixture/`, `config/seed/` | `McpFixtureCatalog`, `DemoDataSeeder` |
 | 보조 모델·구현 | `nl2sql/metadata/`, `nl2sql/heuristic/`, `rag/similarity/`, `eval/metric/`, `llm/support/`, `llm/gateway/` | `TableMetadata`, `HeuristicSqlTemplates`, `SemanticSimilarity`, `ResultSetComparator`, `JsonSupport`, `SpringAiLlmGateway` |
 
 패키지 분리는 읽기 순서를 위한 것이고 동작은 바꾸지 않는다. 컨트롤러 URL·DB 스키마·JSON 응답 규격·오류 코드는 이동 전과 동일하며, 이동으로 필요해진 클래스만 `public` 으로 열었다.
+
+## 10. 보안 게이트 (어디서 무엇을 막는가)
+
+| 시점 | 게이트 | 막는 것 | 실패 시 |
+|---|---|---|---|
+| 도구 등록 | `McpApiRegistrationValidator` | 미지원 전송/인증, 평문 시크릿(`auth_config` 값, 인증 헤더), 헤더 개행, 룰 문법, SSRF 대상, 쓰기 가능한 `source_query` | 400 (`OUTBOUND_TARGET_BLOCKED` 포함) |
+| 실행 직전 | `OutboundTargetPolicy` | 등록 후 테이블이 바뀐 SSRF 대상, 스킴/사용자정보/리다이렉트 | `FAILED` + 감사 로그 1행 |
+| SQL 준비 | `SqlGuard` | DML/DDL, 다중문장/주석, 허용목록 밖 테이블, 묵시적 조인, 무제한 조회 | 조회 `FAILED` (보안 위반은 재시도 없음) |
+| 원천 조회 | `SourceQueryValidator` | 다중문장, 주석, 변경/실행 키워드, 무제한 행 | 등록 400 / 실행 `FAILED` |
+| 결과 반환 | `PiiMasker` | 사용자 마스터 PII 컬럼 | 마스킹된 값 |
+| 로그·감사 저장 | `SensitiveDataMasker` | 토큰·API Key·이메일·전화번호·주민번호 | `***` 로 치환 후 저장 |
+| API 응답 | `WebMapper` | 저장된 로그/헤더의 시크릿 재노출 | `***` 로 치환 |
+
+- 마스킹은 **자르기(truncate) 전에** 수행한다. 경계에서 잘린 값이 남지 않게 하기 위함이다.
+- 등록 검증과 실행 검증을 **둘 다** 두는 이유: `svcm_tb_mcp_api_master` 는 API 밖(DB 콘솔)에서도 수정될 수 있다.

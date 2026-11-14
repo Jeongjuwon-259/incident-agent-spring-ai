@@ -1,10 +1,11 @@
-package com.samsung.gsre.agent.gateway;
+package com.samsung.gsre.agent.gateway.jdbc;
 
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.gateway.exception.SqlExecutionException;
+import com.samsung.gsre.agent.gateway.guard.GuardVerdict;
+import com.samsung.gsre.agent.gateway.mask.PiiMasker;
 import com.samsung.gsre.agent.model.SqlExecutionResult;
 import com.samsung.gsre.agent.nl2sql.SchemaCatalog;
-import java.math.BigDecimal;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -148,37 +149,4 @@ public class DbExecutor {
         return message == null ? e.getClass().getSimpleName() : message;
     }
 
-    /** PII 마스킹 규칙. 이메일/연락처/사번은 부분 보존, 그 외는 앞 2자만 남긴다. */
-    static final class PiiMasker {
-
-        private PiiMasker() {
-        }
-
-        static Object mask(String column, Object value) {
-            if (value == null) {
-                return null;
-            }
-            String text = value instanceof BigDecimal decimal ? decimal.toPlainString() : String.valueOf(value);
-            if (text.isBlank()) {
-                return value;
-            }
-            if (text.contains("@")) {
-                int at = text.indexOf('@');
-                String local = text.substring(0, at);
-                String domain = text.substring(at);
-                String visible = local.length() <= 2 ? local.substring(0, 1) : local.substring(0, 2);
-                return visible + "***" + domain;
-            }
-            if (column != null && (column.contains("phone") || column.contains("tel"))) {
-                String digits = text.replaceAll("[^0-9]", "");
-                if (digits.length() >= 7) {
-                    return digits.substring(0, 3) + "-****-" + digits.substring(digits.length() - 4);
-                }
-            }
-            if (column != null && (column.contains("emp_no") || column.contains("employee"))) {
-                return text.length() <= 2 ? text : text.substring(0, 2) + "****";
-            }
-            return text;
-        }
-    }
 }

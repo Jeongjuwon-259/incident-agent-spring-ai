@@ -1,5 +1,6 @@
 package com.samsung.gsre.agent.mcp.transport;
 
+import com.samsung.gsre.agent.common.constant.McpConstants;
 import java.util.Locale;
 
 /**
@@ -27,7 +28,7 @@ public enum McpHttpMethod {
     /** http_method 값이 비어 있으면 POST 로 본다(기존 등록 행 호환). */
     public static McpHttpMethod from(String raw) {
         if (raw == null || raw.isBlank()) {
-            return POST;
+            return valueOf(McpConstants.HTTP_METHOD_DEFAULT);
         }
         try {
             return McpHttpMethod.valueOf(raw.trim().toUpperCase(Locale.ROOT));

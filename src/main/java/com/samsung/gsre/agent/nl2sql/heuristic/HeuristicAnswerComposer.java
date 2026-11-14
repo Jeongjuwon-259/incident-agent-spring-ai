@@ -28,10 +28,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class HeuristicAnswerComposer {
 
-    // ------------------------------------------------------------------
-    // 하단: 결과 스펙 (AnswerOutcome)
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보
+    // ==================================================================
 
+    /** 문장으로 풀어 쓰는 최대 행 수. (그 이상은 건수만 말한다) */
+    private static final int MAX_ROWS_IN_SENTENCE = 5;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 결과 분류 + 문장 조립
+    // ==================================================================
+
+    /** 성공/실패를 나누고, 결과 모양에 맞는 문장을 이어 붙인다. 마지막에 AnswerOutcome 으로 포장한다. */
     public AnswerOutcome compose(String question, List<LookupResult> results) {
         if (results == null || results.isEmpty()) {
             return new AnswerOutcome(false, "조회를 수행하지 못했습니다. 질의를 다시 확인해 주세요.",
@@ -63,10 +71,6 @@ public class HeuristicAnswerComposer {
         failed.forEach(f -> missing.add(f.purpose() + " 조회 실패"));
         return new AnswerOutcome(failed.isEmpty(), answer.toString(), missing, List.of());
     }
-
-    // ------------------------------------------------------------------
-    // 중단: 결과 유형 판별 + 문장 조립
-    // ------------------------------------------------------------------
 
     private String format(LookupResult result) {
         List<Map<String, Object>> rows = result.result().rows();
@@ -200,12 +204,16 @@ public class HeuristicAnswerComposer {
     private String formatGeneric(String purpose, List<Map<String, Object>> rows) {
         StringBuilder sb = new StringBuilder();
         sb.append(purpose).append(" 결과 ").append(rows.size()).append("건입니다.");
-        int limit = Math.min(rows.size(), 5);
+        int limit = Math.min(rows.size(), MAX_ROWS_IN_SENTENCE);
         for (int i = 0; i < limit; i++) {
-            sb.append('\n').append(JsonRow.of(rows.get(i)));
+            sb.append('\n').append(formatRow(rows.get(i)));
         }
         return sb.toString();
     }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — 값 표현 유틸
+    // ==================================================================
 
     private String text(Map<String, Object> row, String column) {
         Object value = row.get(column);
@@ -222,17 +230,15 @@ public class HeuristicAnswerComposer {
         return String.valueOf(value);
     }
 
-    /** 행 하나를 "컬럼=값, ..." 로 표현하는 내부 뷰. */
-    private record JsonRow() {
-        static String of(Map<String, Object> row) {
-            StringBuilder sb = new StringBuilder();
-            row.forEach((k, v) -> {
-                if (sb.length() > 0) {
-                    sb.append(", ");
-                }
-                sb.append(k).append('=').append(v);
-            });
-            return sb.toString();
-        }
+    /** 행 하나를 "컬럼=값, ..." 로 표현한다. */
+    private String formatRow(Map<String, Object> row) {
+        StringBuilder sb = new StringBuilder();
+        row.forEach((key, value) -> {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(key).append('=').append(value);
+        });
+        return sb.toString();
     }
 }

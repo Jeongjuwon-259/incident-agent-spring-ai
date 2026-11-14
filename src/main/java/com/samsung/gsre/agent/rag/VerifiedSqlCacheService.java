@@ -1,8 +1,9 @@
 package com.samsung.gsre.agent.rag;
 
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
-import com.samsung.gsre.agent.gateway.GuardVerdict;
-import com.samsung.gsre.agent.gateway.SqlGuard;
+import com.samsung.gsre.agent.gateway.guard.GuardVerdict;
+import com.samsung.gsre.agent.gateway.guard.SqlGuard;
 import com.samsung.gsre.agent.model.CacheCandidate;
 import com.samsung.gsre.agent.rag.repository.VerifiedSqlRepository;
 import com.samsung.gsre.agent.rag.similarity.SemanticSimilarity;
@@ -14,7 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
 /**
  * 검증된 질의·SQL 시맨틱 캐시 (RAG).
@@ -41,6 +41,10 @@ import org.springframework.util.StringUtils;
 @Service
 public class VerifiedSqlCacheService {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(임계치·의존성)
+    // ==================================================================
+
     private final VerifiedSqlRepository repository;
     private final SemanticSimilarity similarity;
     private final SqlGuard sqlGuard;
@@ -55,6 +59,10 @@ public class VerifiedSqlCacheService {
         this.sqlGuard = sqlGuard;
         this.props = props;
     }
+
+    // ==================================================================
+    // 중단 (PROCESS) — 검색·등록·사용 집계
+    // ==================================================================
 
     public List<CacheCandidate> search(String question, int topK) {
         float[] queryEmbedding = props.getRag().isEmbeddingEnabled() ? similarity.embed(question) : null;
@@ -79,25 +87,22 @@ public class VerifiedSqlCacheService {
      */
     public CacheCandidate register(String question, String sql, Map<String, String> parameters,
                                    String verifiedBy, String notes) {
-        if (!StringUtils.hasText(verifiedBy)) {
-            throw new IllegalArgumentException("검증자(verifiedBy)가 필요합니다. 검증되지 않은 SQL 은 등록할 수 없습니다.");
-        }
+        ValidationUtils.requireText(verifiedBy, "verifiedBy",
+                "검증자(verifiedBy)가 필요합니다. 검증되지 않은 SQL 은 등록할 수 없습니다.");
         GuardVerdict verdict = sqlGuard.validate(sql);
-        if (!verdict.valid()) {
-            throw new IllegalArgumentException("검증 SQL 이 안전 규칙을 통과하지 못했습니다: " + verdict.violations());
-        }
+        ValidationUtils.requireTrue(verdict.valid(),
+                "검증 SQL 이 안전 규칙을 통과하지 못했습니다: " + verdict.violations());
         float[] embedding = props.getRag().isEmbeddingEnabled() ? similarity.embed(question) : null;
         String embeddingJson = similarity.toJson(embedding);
+        Map<String, String> params = ValidationUtils.orDefault(parameters, Map.of());
         long id = repository.insert(new VerifiedSqlEntry(0L, question, verdict.sql(), verdict.tables(),
-                parameters == null ? Map.of() : parameters, verifiedBy, notes, embedding, null, 0,
-                java.time.Instant.now()));
+                params, verifiedBy, notes, embedding, null, 0, java.time.Instant.now()));
         if (id > 0 && embeddingJson != null) {
             repository.updateEmbedding(id, embeddingJson);
         }
         log.info("[rag] 검증 SQL 등록 id={} verifiedBy={} question={}", id, verifiedBy, question);
         return new CacheCandidate(id, question, verdict.sql(), 1.0,
-                embedding != null ? "embedding" : "lexical", verdict.tables(), verifiedBy,
-                parameters == null ? Map.of() : parameters, notes);
+                embedding != null ? "embedding" : "lexical", verdict.tables(), verifiedBy, params, notes);
     }
 
     public void markUsed(long cacheId) {
@@ -107,6 +112,10 @@ public class VerifiedSqlCacheService {
     public List<VerifiedSqlEntry> entries() {
         return repository.findAll();
     }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — 조회·기동 보정
+    // ==================================================================
 
     /** 시작 시 임베딩이 없는 검증 SQL 을 채워 넣는다. 실패해도 기동은 계속한다. */
     @EventListener(ApplicationReadyEvent.class)

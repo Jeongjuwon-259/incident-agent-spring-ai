@@ -25,9 +25,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class HeuristicSqlTemplates {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(의도별 표준 템플릿의 기준)
+    // ==================================================================
+
     private static final Pattern FROM_TABLE = Pattern.compile("(?is)\\bfrom\\s+([a-z_][a-z0-9_]*)\\s*([a-z][a-z0-9_]*)?");
 
     private final SchemaCatalog catalog;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 의도별 SQL 생성 / 자동 수정
+    // ==================================================================
 
     public PreparedSql build(String question, QueryPlan plan, LookupTask task) {
         Map<String, Object> params = new LinkedHashMap<>();
@@ -128,6 +136,10 @@ public class HeuristicSqlTemplates {
         return new PreparedSql(repaired, failed.parameters(), failed.tables(), SqlOrigin.REPAIRED,
                 failed.cacheId(), "규칙 기반 자동 수정(SELECT * 확장 / LIMIT 보정)");
     }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — SQL 조립 유틸
+    // ==================================================================
 
     private String expandSelectStar(String sql) {
         Matcher matcher = FROM_TABLE.matcher(sql);

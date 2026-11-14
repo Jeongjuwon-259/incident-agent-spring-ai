@@ -88,6 +88,13 @@ agent:
     max-source-rows: ${AGENT_MCP_MAX_SOURCE_ROWS:100}
     max-log-payload-chars: ${AGENT_MCP_MAX_LOG_PAYLOAD_CHARS:20000}
     offline-fallback-enabled: ${AGENT_MCP_OFFLINE_FALLBACK:true}
+    # 외부 엔드포인트(SSRF) 정책. 메타데이터/링크로컬 주소는 설정과 무관하게 항상 차단한다.
+    # allow-local-endpoints 는 로컬 데모(시드 localhost:18080)를 위한 기본값이다.
+    # 운영 배포 시: false 로 두고 allowed-hosts 에 실제 연동 대상만 나열한다.
+    network:
+      allow-local-endpoints: ${AGENT_MCP_ALLOW_LOCAL_ENDPOINTS:true}
+      allowed-hosts: ${AGENT_MCP_ALLOWED_HOSTS:}
+      blocked-hosts: ${AGENT_MCP_BLOCKED_HOSTS:}
 
 logging:
   level:

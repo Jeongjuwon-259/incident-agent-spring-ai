@@ -2,6 +2,7 @@ package com.samsung.gsre.agent.web.handler;
 
 import com.samsung.gsre.agent.mcp.exception.McpApiNotFoundException;
 import com.samsung.gsre.agent.mcp.exception.McpTransportException;
+import com.samsung.gsre.agent.security.net.OutboundTargetBlockedException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +16,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /** SSRF/네트워크 정책 위반 (등록 시점). 실행 중에는 FAILED 결과 + 감사 로그로 남는다. */
+    @ExceptionHandler(OutboundTargetBlockedException.class)
+    public ResponseEntity<Map<String, Object>> handleBlockedTarget(OutboundTargetBlockedException e) {
+        return ResponseEntity.badRequest().body(body("OUTBOUND_TARGET_BLOCKED", e.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException e) {

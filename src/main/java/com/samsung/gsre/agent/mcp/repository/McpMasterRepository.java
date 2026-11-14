@@ -1,5 +1,6 @@
 package com.samsung.gsre.agent.mcp.repository;
 
+import com.samsung.gsre.agent.common.constant.McpConstants;
 import com.samsung.gsre.agent.mcp.McpApiMaster;
 import com.samsung.gsre.agent.mcp.McpDirection;
 import java.sql.ResultSet;
@@ -37,7 +38,8 @@ public class McpMasterRepository {
 
     /** 실행 대상은 활성(Y) 행만. 비활성 도구는 "없는 도구" 로 취급한다. */
     public Optional<McpApiMaster> findActive(String apiId) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM svcm_tb_mcp_api_master WHERE api_id = ? AND active_yn = 'Y'",
+        return jdbc.query("SELECT " + COLUMNS + " FROM svcm_tb_mcp_api_master WHERE api_id = ? AND active_yn = '"
+                        + McpConstants.ACTIVE_YN + "'",
                 (rs, rowNum) -> map(rs), apiId).stream().findFirst();
     }
 
@@ -54,7 +56,8 @@ public class McpMasterRepository {
                 api.endpointUrl(), api.httpMethod(), api.headersConfig(),
                 api.authType(), api.authConfig(), api.requestSchema(),
                 api.requestReshapingRule(), api.responseReshapingRule(), api.sourceQuery(),
-                api.timeoutMs(), api.active() ? "Y" : "N", api.description(), api.createdBy());
+                api.timeoutMs(), api.active() ? McpConstants.ACTIVE_YN : McpConstants.INACTIVE_YN,
+                api.description(), api.createdBy());
     }
 
     public int count() {
@@ -79,7 +82,7 @@ public class McpMasterRepository {
                 rs.getString("response_reshaping_rule"),
                 rs.getString("source_query"),
                 rs.getInt("timeout_ms"),
-                "Y".equalsIgnoreCase(rs.getString("active_yn")),
+                McpConstants.ACTIVE_YN.equalsIgnoreCase(rs.getString("active_yn")),
                 rs.getString("description"),
                 rs.getString("created_by"),
                 created == null ? Instant.now() : created.toInstant(),

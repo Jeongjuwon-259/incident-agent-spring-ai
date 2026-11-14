@@ -1,4 +1,4 @@
-package com.samsung.gsre.agent.gateway;
+package com.samsung.gsre.agent.gateway.guard;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -87,5 +87,36 @@ class SqlGuardTest {
 
         assertThat(verdict.valid()).isTrue();
         assertThat(verdict.sql()).containsIgnoringCase("LIMIT 200");
+    }
+
+    @Test
+    @DisplayName("WITH 절의 CTE 이름은 테이블 허용 목록 검사에서 제외한다")
+    void allowsCteName() {
+        GuardVerdict verdict = guard.validate("""
+                WITH recent AS (SELECT app_id FROM svcm_tb_app_master)
+                SELECT app_id FROM recent
+                """);
+
+        assertThat(verdict.valid()).isTrue();
+        assertThat(verdict.tables()).containsExactly("svcm_tb_app_master");
+    }
+
+    @Test
+    @DisplayName("FROM 절 콤마(묵시적 조인)는 허용 목록 우회를 막기 위해 차단한다")
+    void rejectsImplicitJoin() {
+        GuardVerdict verdict = guard.validate(
+                "SELECT a.app_id FROM svcm_tb_app_master a, svcm_tb_user_info_master u");
+
+        assertThat(verdict.valid()).isFalse();
+        assertThat(verdict.violations()).anyMatch(v -> v.contains("JOIN"));
+    }
+
+    @Test
+    @DisplayName("SELECT ... INTO 는 변경성 구문으로 차단한다")
+    void rejectsSelectInto() {
+        GuardVerdict verdict = guard.validate(
+                "SELECT app_id INTO OUTFILE '/tmp/x' FROM svcm_tb_app_master");
+
+        assertThat(verdict.valid()).isFalse();
     }
 }

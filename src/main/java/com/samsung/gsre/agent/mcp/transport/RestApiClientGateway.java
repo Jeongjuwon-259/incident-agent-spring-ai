@@ -2,10 +2,14 @@ package com.samsung.gsre.agent.mcp.transport;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.samsung.gsre.agent.common.constant.McpConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.mcp.McpApiMaster;
 import com.samsung.gsre.agent.mcp.exception.McpTransportException;
 import com.samsung.gsre.agent.mcp.fixture.McpFixtureCatalog;
+import com.samsung.gsre.agent.security.mask.SensitiveDataMasker;
+import com.samsung.gsre.agent.security.net.OutboundTargetPolicy;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -39,17 +43,24 @@ import org.springframework.stereotype.Component;
 @Component
 public class RestApiClientGateway {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(패턴)와 의존성
+    // ==================================================================
+
     private static final Pattern PATH_VARIABLE = Pattern.compile("\\{([A-Za-z0-9_.-]+)}");
 
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final McpFixtureCatalog fixtures;
+    private final OutboundTargetPolicy targetPolicy;
     private final HttpClient http;
 
-    public RestApiClientGateway(ObjectMapper mapper, AgentProperties props, McpFixtureCatalog fixtures) {
+    public RestApiClientGateway(ObjectMapper mapper, AgentProperties props, McpFixtureCatalog fixtures,
+                                OutboundTargetPolicy targetPolicy) {
         this.mapper = mapper;
         this.props = props;
         this.fixtures = fixtures;
+        this.targetPolicy = targetPolicy;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(200, props.getMcp().getConnectTimeoutMs())))
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -61,6 +72,10 @@ public class RestApiClientGateway {
      *                GET/DELETE 면 Query Parameter 후보가 된다.
      * @param params  호출 파라미터({pathVariable} 치환의 1순위).
      */
+    // ==================================================================
+    // 중단 (PROCESS) — 전송 흐름
+    // ==================================================================
+
     public McpCallResult call(McpApiMaster api, JsonNode payload, Map<String, Object> params) {
         McpHttpMethod method = api.httpMethodValue();
         Map<String, Object> effective = effectiveParams(params, payload);
@@ -71,13 +86,17 @@ public class RestApiClientGateway {
             return fixture(api, body, "transport-mode=OFFLINE");
         }
 
+        // SSRF 방어: 등록 후 테이블이 바뀌었을 수 있으므로 전송 직전에 다시 검사한다.
+        targetPolicy.verify(api.endpointUrl());
+
         long startedAt = System.nanoTime();
         try {
             HttpRequest request = buildRequest(api, method, effective, body);
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             long elapsed = elapsedMs(startedAt);
             log.info("[rest] call apiId={} {} {} status={} {}ms fallback=false",
-                    api.apiId(), method, request.uri(), response.statusCode(), elapsed);
+                    api.apiId(), method, SensitiveDataMasker.maskText(request.uri().toString()),
+                    response.statusCode(), elapsed);
             return new McpCallResult(response.body(), parse(response.body()), response.statusCode(), elapsed,
                     body, false, null);
         } catch (InterruptedException e) {
@@ -107,9 +126,9 @@ public class RestApiClientGateway {
                 .timeout(Duration.ofMillis(api.timeoutMs()));
 
         Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Accept", "application/json");
+        headers.put(McpConstants.HEADER_ACCEPT, McpConstants.CONTENT_TYPE_JSON);
         if (method.hasBody()) {
-            headers.put("Content-Type", "application/json");
+            headers.put(McpConstants.HEADER_CONTENT_TYPE, McpConstants.CONTENT_TYPE_JSON);
         }
         headers.putAll(McpAuthHeaders.customHeaders(api, mapper));
         headers.putAll(McpAuthHeaders.resolve(api, mapper));
@@ -229,13 +248,13 @@ public class RestApiClientGateway {
         }
     }
 
-    // ------------------------------------------------------------------
-    // 응답 해석 / 폴백
-    // ------------------------------------------------------------------
+    // ==================================================================
+    // 하단 (OUTPUT) — 응답 해석 / 폴백 / 결과
+    // ==================================================================
 
     /** REST 응답은 봉투가 없다. JSON 이면 그대로, 아니면 텍스트 노드로 넘긴다. */
     private JsonNode parse(String body) {
-        if (body == null || body.isBlank()) {
+        if (ValidationUtils.isBlank(body)) {
             return mapper.nullNode();
         }
         String trimmed = body.strip();

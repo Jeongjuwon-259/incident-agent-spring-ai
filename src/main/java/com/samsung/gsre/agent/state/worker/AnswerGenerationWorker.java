@@ -29,8 +29,16 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class AnswerGenerationWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final LlmGateway llmGateway;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 답변 생성
+    // ==================================================================
 
     public StageOutcome answer(PipelineContext ctx) {
         long started = System.nanoTime();

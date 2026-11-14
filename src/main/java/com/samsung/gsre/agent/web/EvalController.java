@@ -1,5 +1,7 @@
 package com.samsung.gsre.agent.web;
 
+import com.samsung.gsre.agent.common.constant.AgentConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.eval.EvalBatchStart;
 import com.samsung.gsre.agent.eval.EvalService;
 import com.samsung.gsre.agent.eval.EvalTestCase;
@@ -59,7 +61,7 @@ public class EvalController {
     /** 평가 실행 접수. 비동기로 돌고 Batch ID 로 진행 상태를 조회한다. */
     @PostMapping("/batches")
     public ResponseEntity<EvalBatchStart> startBatch(@RequestBody(required = false) EvalBatchRequest request) {
-        EvalBatchRequest body = request == null ? new EvalBatchRequest(null, true, null) : request;
+        EvalBatchRequest body = ValidationUtils.orDefault(request, new EvalBatchRequest(null, true, null));
         EvalBatchStart start = evalService.startBatch(body.tcIds(), body.all() == null || body.all(),
                 body.requestedBy() == null ? "web" : body.requestedBy());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(start);
@@ -67,7 +69,7 @@ public class EvalController {
 
     @GetMapping("/batches")
     public List<EvalBatchView> batches(@RequestParam(defaultValue = "20") int limit) {
-        return evalService.batches(Math.min(Math.max(limit, 1), 100)).stream()
+        return evalService.batches(Math.min(Math.max(limit, 1), AgentConstants.MAX_PAGE_SIZE)).stream()
                 .map(WebMapper::toBatchView).toList();
     }
 
@@ -85,7 +87,8 @@ public class EvalController {
     @GetMapping("/cases/{tcId}/history")
     public List<EvalResultView> history(@PathVariable String tcId,
                                         @RequestParam(defaultValue = "20") int limit) {
-        return evalService.caseHistory(tcId, Math.min(Math.max(limit, 1), 100)).stream()
+        return evalService.caseHistory(tcId,
+                Math.min(Math.max(limit, 1), AgentConstants.MAX_PAGE_SIZE)).stream()
                 .map(WebMapper::toResultView).toList();
     }
 }

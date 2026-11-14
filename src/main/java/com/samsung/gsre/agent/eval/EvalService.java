@@ -1,11 +1,13 @@
 package com.samsung.gsre.agent.eval;
 
+import com.samsung.gsre.agent.common.constant.AgentConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.eval.metric.ResultSetComparator;
 import com.samsung.gsre.agent.eval.repository.EvalRepository;
-import com.samsung.gsre.agent.gateway.DbExecutor;
-import com.samsung.gsre.agent.gateway.GuardVerdict;
-import com.samsung.gsre.agent.gateway.SqlGuard;
+import com.samsung.gsre.agent.gateway.jdbc.DbExecutor;
+import com.samsung.gsre.agent.gateway.guard.GuardVerdict;
+import com.samsung.gsre.agent.gateway.guard.SqlGuard;
 import com.samsung.gsre.agent.llm.LlmGateway;
 import com.samsung.gsre.agent.llm.prompt.PromptBuilder;
 import com.samsung.gsre.agent.llm.support.JsonSupport;
@@ -15,7 +17,6 @@ import com.samsung.gsre.agent.model.SqlExecutionResult;
 import com.samsung.gsre.agent.state.IncidentQueryFlowService;
 import com.samsung.gsre.agent.state.PipelineResult;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -52,11 +53,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class EvalService {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(상태값·배치 ID 형식·의존성)
+    // ==================================================================
+
     public static final String STATUS_RUNNING = "RUNNING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_FAILED = "FAILED";
-    private static final DateTimeFormatter BATCH_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-
     private final EvalRepository repository;
     private final IncidentQueryFlowService flowService;
     private final LlmGateway llmGateway;
@@ -93,10 +96,10 @@ public class EvalService {
 
     public EvalBatchStart startBatch(List<String> tcIds, boolean all, String requestedBy) {
         List<EvalTestCase> cases = selectCases(tcIds, all);
-        if (cases.isEmpty()) {
-            throw new IllegalArgumentException("평가할 테스트 케이스가 없습니다. TC 를 등록하거나 선택해 주세요.");
-        }
-        String batchId = "EVAL-" + java.time.LocalDateTime.now().format(BATCH_FORMAT) + "-"
+        ValidationUtils.requireTrue(!cases.isEmpty(),
+                "평가할 테스트 케이스가 없습니다. TC 를 등록하거나 선택해 주세요.");
+        String batchId = AgentConstants.EVAL_BATCH_PREFIX
+                + java.time.LocalDateTime.now().format(AgentConstants.ID_TIMESTAMP_FORMAT) + "-"
                 + String.format(Locale.ROOT, "%03X", ThreadLocalRandom.current().nextInt(0xFFF));
         repository.insertBatch(batchId, requestedBy, cases.size());
         evalExecutor.execute(() -> runBatch(batchId, cases));
@@ -142,9 +145,10 @@ public class EvalService {
 
     public EvalCaseResult evaluateCase(String batchId, EvalTestCase tc) {
         long started = System.nanoTime();
+
+        // [1] 실제 Agent 를 그대로 호출해 SQL·결과·답변을 수집한다. (평가용 별도 경로를 만들지 않는다)
         PipelineResult run = flowService.handle("eval-harness", "EVAL", "eval-" + batchId + "-" + tc.tcId(),
                 tc.question());
-
         List<LookupResult> succeeded = run.lookups().stream().filter(r -> !r.failed()).toList();
         List<SqlExecutionResult> actualResults = succeeded.stream().map(LookupResult::result).toList();
         String actualSql = run.lookups().isEmpty() ? null : run.lookups().get(run.lookups().size() - 1).sql();
@@ -152,47 +156,61 @@ public class EvalService {
                 ? List.of()
                 : succeeded.get(succeeded.size() - 1).result().rows());
 
+        // [2] 4개 지표 판정: 실행 성공 / EX(결과셋) / AA(답변) / FN(근거)
         boolean execPass = !actualResults.isEmpty();
-        String execReason = execPass ? "SQL 실행 성공(" + actualResults.size() + "건 조회)"
-                : failureReason(run);
+        String execReason = execPass ? "SQL 실행 성공(" + actualResults.size() + "건 조회)" : failureReason(run);
+        JudgeVerdict ex = judgeExecution(tc.expectedSql(), actualResults, execPass);
+        JudgeVerdict aa = judgeAnswer(tc, run);
+        JudgeVerdict fn = judgeFaithfulness(tc, run);
 
-        GuardVerdict expectedGuard = sqlGuard.validate(tc.expectedSql());
-        boolean exPass = false;
-        String exReason;
-        if (!expectedGuard.valid()) {
-            exReason = "예상 SQL 이 검증 규칙을 통과하지 못했습니다: " + expectedGuard.violations();
-        } else if (!execPass) {
-            exReason = "실제 SQL 실행 결과가 없어 비교할 수 없습니다.";
-        } else {
-            try {
-                SqlExecutionResult expected = dbExecutor.execute(expectedGuard, Map.of());
-                exPass = comparator.matchesAny(expected, actualResults);
-                exReason = exPass
-                        ? "예상 SQL 결과셋과 실제 결과셋이 일치합니다(행 " + expected.rowCount() + "건)."
-                        : "결과셋이 다릅니다. 예상 " + expected.rowCount() + "건 / 실제 "
-                        + actualResults.stream().mapToInt(SqlExecutionResult::rowCount).sum() + "건";
-            } catch (RuntimeException e) {
-                exReason = "예상 SQL 실행 실패: " + e.getMessage();
-            }
-        }
-
-        JudgeVerdict aa = tc.expectedAnswer() == null || tc.expectedAnswer().isBlank()
-                ? JudgeVerdict.fail("예상 답변이 없어 AA 를 판정할 수 없습니다.")
-                : llmGateway.judgeAnswer(tc.question(), tc.expectedAnswer(), run.answer());
-        JudgeVerdict fn = llmGateway.judgeFaithfulness(tc.question(),
-                promptBuilder.resultContext(run.lookups(), props.getEval().getJudgeTruncateRows()),
-                run.answer());
-
-        boolean overall = exPass && aa.pass() && fn.pass() && execPass;
+        // [3] 종합 판정과 사유를 조립한다. (모두 Pass 일 때만 Pass)
+        boolean overall = ex.pass() && aa.pass() && fn.pass() && execPass;
         String overallReason = (overall ? "4개 지표 모두 Pass" : "일부 지표 Fail")
-                + " | EX=" + flag(exPass) + " AA=" + flag(aa.pass()) + " FN=" + flag(fn.pass())
+                + " | EX=" + flag(ex.pass()) + " AA=" + flag(aa.pass()) + " FN=" + flag(fn.pass())
                 + " EXEC=" + flag(execPass);
 
         return new EvalCaseResult(batchId, tc.tcId(), run.runId(), actualSql, actualResultJson,
                 run.answer(), tc.question(), tc.expectedSql(), tc.expectedAnswer(),
-                exPass, exReason, aa.pass(), aa.reason(), fn.pass(), fn.reason(),
+                ex.pass(), ex.reason(), aa.pass(), aa.reason(), fn.pass(), fn.reason(),
                 execPass, execReason, overall, overallReason,
                 (System.nanoTime() - started) / 1_000_000, Instant.now());
+    }
+
+    /** EX: 예상 SQL 을 실제로 실행한 결과셋과 비교한다. SQL 문장이 달라도 결과가 같으면 Pass. */
+    private JudgeVerdict judgeExecution(String expectedSql, List<SqlExecutionResult> actualResults, boolean execPass) {
+        GuardVerdict expectedGuard = sqlGuard.validate(expectedSql);
+        if (!expectedGuard.valid()) {
+            return JudgeVerdict.fail("예상 SQL 이 검증 규칙을 통과하지 못했습니다: " + expectedGuard.violations());
+        }
+        if (!execPass) {
+            return JudgeVerdict.fail("실제 SQL 실행 결과가 없어 비교할 수 없습니다.");
+        }
+        try {
+            SqlExecutionResult expected = dbExecutor.execute(expectedGuard, Map.of());
+            if (comparator.matchesAny(expected, actualResults)) {
+                return JudgeVerdict.pass("예상 SQL 결과셋과 실제 결과셋이 일치합니다(행 "
+                        + expected.rowCount() + "건).");
+            }
+            return JudgeVerdict.fail("결과셋이 다릅니다. 예상 " + expected.rowCount() + "건 / 실제 "
+                    + actualResults.stream().mapToInt(SqlExecutionResult::rowCount).sum() + "건");
+        } catch (RuntimeException e) {
+            return JudgeVerdict.fail("예상 SQL 실행 실패: " + e.getMessage());
+        }
+    }
+
+    /** AA: 예상 답변이 없으면 판정하지 않는다. */
+    private JudgeVerdict judgeAnswer(EvalTestCase tc, PipelineResult run) {
+        if (ValidationUtils.isBlank(tc.expectedAnswer())) {
+            return JudgeVerdict.fail("예상 답변이 없어 AA 를 판정할 수 없습니다.");
+        }
+        return llmGateway.judgeAnswer(tc.question(), tc.expectedAnswer(), run.answer());
+    }
+
+    /** FN: 최종 답변이 조회 결과에만 근거하는지 판정한다. */
+    private JudgeVerdict judgeFaithfulness(EvalTestCase tc, PipelineResult run) {
+        return llmGateway.judgeFaithfulness(tc.question(),
+                promptBuilder.resultContext(run.lookups(), props.getEval().getJudgeTruncateRows()),
+                run.answer());
     }
 
     // ------------------------------------------------------------------
@@ -204,8 +222,8 @@ public class EvalService {
     }
 
     public EvalTestCase caseById(String tcId) {
-        return repository.findCase(tcId).orElseThrow(
-                () -> new IllegalArgumentException("테스트 케이스를 찾을 수 없습니다: " + tcId));
+        return ValidationUtils.requireFound(repository.findCase(tcId),
+                "테스트 케이스를 찾을 수 없습니다: " + tcId);
     }
 
     public EvalTestCase saveCase(String tcId, String question, String expectedSql, String expectedAnswer,
@@ -223,8 +241,8 @@ public class EvalService {
     }
 
     public EvalBatch batch(String batchId) {
-        return repository.findBatch(batchId).orElseThrow(
-                () -> new IllegalArgumentException("평가 배치를 찾을 수 없습니다: " + batchId));
+        return ValidationUtils.requireFound(repository.findBatch(batchId),
+                "평가 배치를 찾을 수 없습니다: " + batchId);
     }
 
     public List<EvalBatch> batches(int limit) {

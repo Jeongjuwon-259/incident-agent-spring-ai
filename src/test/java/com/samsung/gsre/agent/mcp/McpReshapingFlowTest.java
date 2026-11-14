@@ -19,6 +19,7 @@ import com.samsung.gsre.agent.mcp.reshaping.DataReshaper;
 import com.samsung.gsre.agent.mcp.reshaping.ReshapingResult;
 import com.samsung.gsre.agent.mcp.transport.McpCallResult;
 import com.samsung.gsre.agent.mcp.transport.McpClientGateway;
+import com.samsung.gsre.agent.security.net.OutboundTargetPolicy;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -391,7 +392,7 @@ class McpReshapingFlowTest {
             int port = server.getAddress().getPort();
             AgentProperties props = new AgentProperties();
             props.getMcp().setTransportMode("HTTP");
-            McpClientGateway httpGateway = new McpClientGateway(objectMapper, props, fixtures);
+            McpClientGateway httpGateway = new McpClientGateway(objectMapper, props, fixtures, new OutboundTargetPolicy(props));
             McpApiMaster api = new McpApiMaster("MCP-HTTP-TEST", "HTTP 테스트", "k8s.pod.list",
                     McpDirection.OUTBOUND, "HTTP", "http://127.0.0.1:" + port + "/mcp", "NONE", null,
                     null, null, "{\"mode\":\"OBJECT\",\"fields\":[{\"target\":\"value\",\"source\":\"$.value\"},"

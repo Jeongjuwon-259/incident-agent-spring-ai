@@ -30,9 +30,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class ReuseDecisionWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final LlmGateway llmGateway;
     private final VerifiedSqlCacheService cacheService;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 재사용 판단
+    // ==================================================================
 
     public StageOutcome decide(PipelineContext ctx) {
         long started = System.nanoTime();

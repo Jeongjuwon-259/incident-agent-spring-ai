@@ -29,6 +29,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class HeuristicQueryPlanner {
 
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(패턴·불용어)
+    // ==================================================================
+
     private static final Pattern APP_ID = Pattern.compile("(?i)APP\\s*[-_ ]?\\s*(\\d{3,5})");
     private static final Pattern DEPT_NAME = Pattern.compile("([가-힣A-Za-z0-9]+(?:팀|부|실|센터|그룹|본부))");
     private static final Pattern ALIAS_HINT = Pattern.compile("[\"'“”]?([가-힣A-Za-z0-9 ]{2,20})[\"'“”]?\\s*(?:이라는|라는|이라고|별칭)");
@@ -37,6 +41,10 @@ public class HeuristicQueryPlanner {
             "알려줘", "알려", "보여줘", "보여", "조회해줘", "조회", "궁금해", "누구야", "누구인가", "누구",
             "뭐야", "무엇인가", "인가", "인지", "해줘", "좀", "그리고", "현재", "최근", "대한", "관련",
             "있어", "있나", "있습니까", "뭐가", "어떤", "몇", "명", "건", "개");
+
+    // ==================================================================
+    // 중단 (PROCESS) — 질의 해석 → 계획
+    // ==================================================================
 
     public QueryPlan plan(String question, List<ConversationTurn> history) {
         String normalized = question == null ? "" : question.strip().replaceAll("\\s+", " ");
@@ -177,6 +185,10 @@ public class HeuristicQueryPlanner {
                 || lower.contains("몇명") || lower.contains("인원") || lower.contains("접근 권한")
                 || lower.contains("권한 가진");
     }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — 추출 유틸
+    // ==================================================================
 
     public static List<String> extractAppIds(String text) {
         List<String> ids = new ArrayList<>();

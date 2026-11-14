@@ -37,9 +37,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class QueryUnderstandingWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final LlmGateway llmGateway;
     private final AgentProperties props;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 질의 이해 → 조회 계획
+    // ==================================================================
 
     public StageOutcome understand(PipelineContext ctx) {
         long started = System.nanoTime();

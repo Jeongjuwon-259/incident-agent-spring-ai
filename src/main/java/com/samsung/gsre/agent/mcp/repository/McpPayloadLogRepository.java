@@ -1,5 +1,6 @@
 package com.samsung.gsre.agent.mcp.repository;
 
+import com.samsung.gsre.agent.common.constant.McpConstants;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -58,7 +59,7 @@ public class McpPayloadLogRepository {
     }
 
     public List<McpPayloadLog> findRecent(String apiId, int limit) {
-        int safeLimit = Math.max(1, Math.min(limit, 200));
+        int safeLimit = Math.max(1, Math.min(limit, McpConstants.MAX_LOG_QUERY_LIMIT));
         if (apiId == null || apiId.isBlank()) {
             return jdbc.query("SELECT " + COLUMNS
                     + " FROM svcm_tb_mcp_payload_log ORDER BY log_id DESC LIMIT ?",

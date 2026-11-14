@@ -32,9 +32,17 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class SqlExecutionWorker {
 
+    // ==================================================================
+    // 상단 (INPUT) — 의존성
+    // ==================================================================
+
     private final SelfRepairEngine selfRepairEngine;
     private final AgentProperties props;
     private final TraceRecorder traceRecorder;
+
+    // ==================================================================
+    // 중단 (PROCESS) — 검증·실행·복구
+    // ==================================================================
 
     public StageOutcome execute(PipelineContext ctx) {
         long started = System.nanoTime();

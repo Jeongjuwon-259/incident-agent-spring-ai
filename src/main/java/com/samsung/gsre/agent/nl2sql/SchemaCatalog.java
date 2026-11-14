@@ -2,6 +2,7 @@ package com.samsung.gsre.agent.nl2sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.nl2sql.metadata.ColumnMetadata;
 import com.samsung.gsre.agent.nl2sql.metadata.JoinHint;
 import com.samsung.gsre.agent.nl2sql.metadata.TableMetadata;
@@ -29,6 +30,10 @@ import org.springframework.util.StringUtils;
 @Slf4j
 @Component
 public class SchemaCatalog {
+
+    // ==================================================================
+    // 상단 (INPUT) — 기준정보(리소스 경로·메타데이터 사전)
+    // ==================================================================
 
     private static final String RESOURCE = "nl2sql/schema-catalog.json";
 
@@ -94,9 +99,13 @@ public class SchemaCatalog {
                 t.path("notes").asText(""));
     }
 
+    // ==================================================================
+    // 중단 (PROCESS) — 메타데이터 조회
+    // ==================================================================
+
     /** 대소문자/스키마 접두어를 제거한 정규화 이름. */
     public static String normalize(String tableName) {
-        if (tableName == null) {
+        if (ValidationUtils.isBlank(tableName)) {
             return "";
         }
         String name = tableName.trim().replace("\"", "").replace("`", "");
@@ -139,6 +148,10 @@ public class SchemaCatalog {
     public List<String> piiColumns(String tableName) {
         return columnsOf(tableName).stream().filter(ColumnMetadata::pii).map(ColumnMetadata::name).toList();
     }
+
+    // ==================================================================
+    // 하단 (OUTPUT) — 프롬프트용 렌더링
+    // ==================================================================
 
     /** 프롬프트에 넣을 압축 메타데이터 블록. */
     public String renderForPrompt() {

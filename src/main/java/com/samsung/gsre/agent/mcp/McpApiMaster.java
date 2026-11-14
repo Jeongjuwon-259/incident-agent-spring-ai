@@ -1,9 +1,13 @@
 package com.samsung.gsre.agent.mcp;
 
+import com.samsung.gsre.agent.common.constant.AgentConstants;
+import com.samsung.gsre.agent.common.constant.McpConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.mcp.transport.McpClientGateway;
 import com.samsung.gsre.agent.mcp.transport.McpHttpMethod;
 import com.samsung.gsre.agent.mcp.transport.RestApiClientGateway;
 import java.time.Instant;
+import java.util.Locale;
 
 /**
  * MCP/REST API 등록 마스터 1행 ({@code svcm_tb_mcp_api_master}).
@@ -43,10 +47,10 @@ public record McpApiMaster(
 
     public McpApiMaster {
         direction = direction == null ? McpDirection.OUTBOUND : direction;
-        transportType = blankTo(transportType, "HTTP");
-        authType = blankTo(authType, "NONE");
+        transportType = blankTo(transportType, McpConstants.TRANSPORT_HTTP);
+        authType = blankTo(authType, McpConstants.AUTH_NONE);
         httpMethod = McpHttpMethod.from(httpMethod).name();
-        timeoutMs = timeoutMs <= 0 ? 5_000 : timeoutMs;
+        timeoutMs = timeoutMs <= 0 ? AgentConstants.DEFAULT_MCP_TIMEOUT_MS : timeoutMs;
     }
 
     /**
@@ -65,7 +69,7 @@ public record McpApiMaster(
 
     /** REST/REST_API 만 순수 REST 게이트웨이로 간다. 나머지는 MCP tools/call. */
     public boolean isRestTransport() {
-        return "REST".equals(transportType) || "REST_API".equals(transportType);
+        return McpConstants.REST_TRANSPORTS.contains(transportType);
     }
 
     public McpHttpMethod httpMethodValue() {
@@ -78,22 +82,22 @@ public record McpApiMaster(
     }
 
     public boolean hasHeadersConfig() {
-        return headersConfig != null && !headersConfig.isBlank();
+        return ValidationUtils.hasText(headersConfig);
     }
 
     public boolean hasRequestRule() {
-        return requestReshapingRule != null && !requestReshapingRule.isBlank();
+        return ValidationUtils.hasText(requestReshapingRule);
     }
 
     public boolean hasResponseRule() {
-        return responseReshapingRule != null && !responseReshapingRule.isBlank();
+        return ValidationUtils.hasText(responseReshapingRule);
     }
 
     public boolean hasSourceQuery() {
-        return sourceQuery != null && !sourceQuery.isBlank();
+        return ValidationUtils.hasText(sourceQuery);
     }
 
     private static String blankTo(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value.trim().toUpperCase();
+        return ValidationUtils.isBlank(value) ? fallback : value.trim().toUpperCase(Locale.ROOT);
     }
 }

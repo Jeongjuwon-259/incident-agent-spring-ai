@@ -2,6 +2,8 @@ package com.samsung.gsre.agent.mcp.transport;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.samsung.gsre.agent.common.constant.McpConstants;
+import com.samsung.gsre.agent.common.validation.ValidationUtils;
 import com.samsung.gsre.agent.mcp.McpApiMaster;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -26,23 +28,25 @@ final class McpAuthHeaders {
     static Map<String, String> resolve(McpApiMaster api, ObjectMapper mapper) {
         Map<String, String> headers = new LinkedHashMap<>();
         String authType = api.authType();
-        if (authType == null || "NONE".equalsIgnoreCase(authType) || api.authConfig() == null
-                || api.authConfig().isBlank()) {
+        if (authType == null || McpConstants.AUTH_NONE.equalsIgnoreCase(authType)
+                || ValidationUtils.isBlank(api.authConfig())) {
             return headers;
         }
         try {
             JsonNode config = mapper.readTree(api.authConfig());
-            String envVar = config.path("envVar").asText("");
+            String envVar = config.path(McpConstants.AUTH_CONFIG_ENV_VAR).asText("");
             String secret = envVar.isBlank() ? "" : System.getenv(envVar);
-            if (secret == null || secret.isBlank()) {
+            if (ValidationUtils.isBlank(secret)) {
                 log.warn("[transport] 인증 환경변수가 없어 헤더를 생략합니다 apiId={} envVar={}", api.apiId(), envVar);
                 return headers;
             }
             switch (authType.trim().toUpperCase(Locale.ROOT)) {
-                case "BEARER" -> headers.put("Authorization", "Bearer " + secret);
-                case "API_KEY" -> headers.put(config.path("header").asText("X-Api-Key"), secret);
-                case "BASIC" -> headers.put("Authorization",
-                        "Basic " + Base64.getEncoder().encodeToString(secret.getBytes()));
+                case McpConstants.AUTH_BEARER -> headers.put(McpConstants.HEADER_AUTHORIZATION,
+                        McpConstants.AUTH_SCHEME_BEARER + secret);
+                case McpConstants.AUTH_API_KEY -> headers.put(
+                        config.path(McpConstants.AUTH_CONFIG_HEADER).asText(McpConstants.HEADER_DEFAULT_API_KEY), secret);
+                case McpConstants.AUTH_BASIC -> headers.put(McpConstants.HEADER_AUTHORIZATION,
+                        McpConstants.AUTH_SCHEME_BASIC + Base64.getEncoder().encodeToString(secret.getBytes()));
                 default -> log.warn("[transport] 알 수 없는 auth_type={} apiId={}", authType, api.apiId());
             }
         } catch (Exception e) {
