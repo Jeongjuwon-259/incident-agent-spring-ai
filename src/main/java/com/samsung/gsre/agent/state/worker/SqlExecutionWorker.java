@@ -7,7 +7,7 @@ import com.samsung.gsre.agent.model.LookupTask;
 import com.samsung.gsre.agent.state.PipelineContext;
 import com.samsung.gsre.agent.state.Stage;
 import com.samsung.gsre.agent.state.StageOutcome;
-import com.samsung.gsre.agent.state.TraceRecorder;
+import com.samsung.gsre.agent.state.trace.TraceRecorder;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

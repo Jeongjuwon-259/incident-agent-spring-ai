@@ -1,10 +1,10 @@
 package com.samsung.gsre.agent.state;
 
-import com.samsung.gsre.agent.audit.AuditRepository;
-import com.samsung.gsre.agent.audit.ConversationStore;
+import com.samsung.gsre.agent.audit.repository.AuditRepository;
+import com.samsung.gsre.agent.audit.repository.ConversationStore;
 import com.samsung.gsre.agent.config.AgentProperties;
 import com.samsung.gsre.agent.llm.AgentRunScope;
-import com.samsung.gsre.agent.llm.LlmException;
+import com.samsung.gsre.agent.llm.exception.LlmException;
 import com.samsung.gsre.agent.model.AnswerOutcome;
 import com.samsung.gsre.agent.model.LookupTask;
 import com.samsung.gsre.agent.model.RunStatus;

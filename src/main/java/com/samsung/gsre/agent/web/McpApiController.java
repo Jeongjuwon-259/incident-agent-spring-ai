@@ -4,7 +4,7 @@ import com.samsung.gsre.agent.mcp.McpApiMaster;
 import com.samsung.gsre.agent.mcp.McpDirection;
 import com.samsung.gsre.agent.mcp.McpExecutionResult;
 import com.samsung.gsre.agent.mcp.McpOrchestratorService;
-import com.samsung.gsre.agent.mcp.McpPayloadLog;
+import com.samsung.gsre.agent.mcp.repository.McpPayloadLog;
 import com.samsung.gsre.agent.web.dto.McpApiRegisterRequest;
 import com.samsung.gsre.agent.web.dto.McpApiView;
 import com.samsung.gsre.agent.web.dto.McpExecuteRequest;

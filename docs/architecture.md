@@ -212,3 +212,23 @@ McpExecutionResult (status, transportType, httpMethod, request, response, stages
 | 벡터 저장소 | `SemanticSimilarity` 구현 교체 (pgvector/Redis/사내 RAGaaS) |
 | 감사 저장소 | `AuditRepository` 를 JDBC→Kafka/OpenSearch 로 교체 |
 | 인증/권한 | Controller 앞단 필터에서 userId/Scope 주입, `SqlGuard` 에 Scope 조건 추가 |
+
+## 9. 패키지 배치 규칙 (업무 소스 ↔ 패턴 소스 분리)
+
+도메인 패키지 상위 레벨에는 **업무 흐름과 핵심 도메인 모델만** 둔다. 예외·오류 핸들러·저수준 어댑터·픽스처·리포지토리·보조 모델은 한 단계 아래 하위 패키지로 내린다.
+
+| 성격 | 위치 | 예 |
+|---|---|---|
+| 업무 흐름 | `<도메인>/` | `state.IncidentQueryFlowService`, `mcp.McpOrchestratorService`, `web.*Controller` |
+| 핵심 도메인·상태 모델 | `<도메인>/`, `model/` | `PipelineContext`, `PipelineResult`, `McpApiMaster`, `QueryPlan` |
+| 단계별 처리 | `state/worker/` | `QueryUnderstandingWorker` … `AnswerGenerationWorker` |
+| 단계 이력 | `state/trace/` | `TraceRecorder`, `TraceStep` |
+| 예외 | `<도메인>/exception/` | `mcp/exception/*`, `llm/exception/LlmException`, `gateway/exception/SqlExecutionException` |
+| 전역 오류 응답 | `web/handler/` | `GlobalExceptionHandler` |
+| 통신 어댑터·인증 | `mcp/transport/` | `McpClientGateway`, `RestApiClientGateway`, `McpAuthHeaders` |
+| 변환·룰 엔진 | `mcp/reshaping/`, `llm/prompt/`, `web/mapper/` | `DataReshaper`, `PromptBuilder`, `WebMapper` |
+| 리포지토리·원천 조회 | `<도메인>/repository/` | `McpMasterRepository`, `VerifiedSqlRepository`, `AuditRepository` |
+| 픽스처·시드 | `mcp/fixture/`, `config/seed/` | `McpFixtureCatalog`, `DemoDataSeeder` |
+| 보조 모델·구현 | `nl2sql/metadata/`, `nl2sql/heuristic/`, `rag/similarity/`, `eval/metric/`, `llm/support/`, `llm/gateway/` | `TableMetadata`, `HeuristicSqlTemplates`, `SemanticSimilarity`, `ResultSetComparator`, `JsonSupport`, `SpringAiLlmGateway` |
+
+패키지 분리는 읽기 순서를 위한 것이고 동작은 바꾸지 않는다. 컨트롤러 URL·DB 스키마·JSON 응답 규격·오류 코드는 이동 전과 동일하며, 이동으로 필요해진 클래스만 `public` 으로 열었다.

@@ -3,6 +3,7 @@ package com.samsung.gsre.agent.state;
 import com.samsung.gsre.agent.model.LookupResult;
 import com.samsung.gsre.agent.model.QueryPlan;
 import com.samsung.gsre.agent.model.RunStatus;
+import com.samsung.gsre.agent.state.trace.TraceStep;
 import java.util.List;
 
 /**

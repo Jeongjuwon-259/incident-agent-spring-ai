@@ -3,6 +3,7 @@ package com.samsung.gsre.agent.web;
 import com.samsung.gsre.agent.rag.VerifiedSqlCacheService;
 import com.samsung.gsre.agent.web.dto.CacheEntryRequest;
 import com.samsung.gsre.agent.web.dto.CacheEntryView;
+import com.samsung.gsre.agent.web.mapper.WebMapper;
 import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;

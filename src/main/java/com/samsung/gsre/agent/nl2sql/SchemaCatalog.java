@@ -2,6 +2,9 @@ package com.samsung.gsre.agent.nl2sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.samsung.gsre.agent.nl2sql.metadata.ColumnMetadata;
+import com.samsung.gsre.agent.nl2sql.metadata.JoinHint;
+import com.samsung.gsre.agent.nl2sql.metadata.TableMetadata;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;

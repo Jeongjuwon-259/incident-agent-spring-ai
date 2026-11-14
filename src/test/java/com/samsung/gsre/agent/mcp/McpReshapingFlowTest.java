@@ -10,6 +10,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.samsung.gsre.agent.config.AgentProperties;
+import com.samsung.gsre.agent.mcp.exception.ReshapingException;
+import com.samsung.gsre.agent.mcp.fixture.McpFixtureCatalog;
+import com.samsung.gsre.agent.mcp.repository.McpMasterRepository;
+import com.samsung.gsre.agent.mcp.repository.McpPayloadLog;
+import com.samsung.gsre.agent.mcp.repository.McpPayloadLogRepository;
+import com.samsung.gsre.agent.mcp.reshaping.DataReshaper;
+import com.samsung.gsre.agent.mcp.reshaping.ReshapingResult;
+import com.samsung.gsre.agent.mcp.transport.McpCallResult;
+import com.samsung.gsre.agent.mcp.transport.McpClientGateway;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;

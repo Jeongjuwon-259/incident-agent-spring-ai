@@ -162,21 +162,51 @@ spring:
 
 ### 3.4 패키지 구조
 
+도메인 패키지의 **상위 레벨에는 업무 흐름과 핵심 도메인 모델만** 둡니다. 예외·오류 핸들러·저수준 어댑터·
+픽스처·리포지토리·보조 모델처럼 반복되는 패턴 소스는 **한 단계 아래 하위 패키지**(`transport`, `reshaping`,
+`repository`, `fixture`, `exception`, `handler`, `worker`, `trace`, `metric`, `similarity`, `prompt`, `support`,
+`metadata`, `heuristic`, `seed`, `mapper`)로 내려, 폴더를 열면 업무 로직만 먼저 읽히게 했습니다.
+
 ```
 com.samsung.gsre.agent
-├── config        ChatClientConfig(로컬 LLM), AgentProperties(정책), AsyncConfig, DemoDataSeeder
-├── state         IncidentQueryFlowService(6단계 흐름), PipelineContext, Stage, TraceRecorder
-│   └── worker    단계별 Worker 6개 (질의이해/RAG/재사용판단/SQL준비/실행/답변)
-├── llm           LlmGateway, SpringAiLlmGateway, HeuristicLlmGateway, PromptBuilder, AgentRunScope
-├── rag           VerifiedSqlCacheService, SemanticSimilarity, LexicalSimilarity, Repository
-├── nl2sql        SchemaCatalog(8대 메타데이터), HeuristicQueryPlanner/SqlTemplates/AnswerComposer
-├── gateway       SqlGuard(안전 검증), DbExecutor(JDBC), SelfRepairEngine(재시도 루프)
-├── eval          EvalService(배치), ResultSetComparator(EX), HeuristicJudge(AA/FN), Repository
-├── mcp           McpOrchestratorService(IPO 5단계), DataReshaper(JSONPath 룰 엔진),
-│                 McpClientGateway(tools/call), McpSourceQueryReader(INBOUND 원천), Repository
-├── audit         AuditRepository(실행/단계/LLM 이력), ConversationStore(멀티턴)
-└── web           AgentController, EvalController, CacheController, McpApiController, WebMapper, DTO
+├── state               IncidentQueryFlowService(6단계 흐름), PipelineContext/PipelineResult, Stage/StageOutcome
+│   ├── worker          단계별 Worker 6개 (질의이해/RAG/재사용판단/SQL준비/실행/답변)
+│   └── trace           TraceRecorder, TraceStep (단계 이력 기록)
+├── mcp                 McpOrchestratorService(IPO 5단계), McpApiMaster/McpExecutionContext/McpExecutionResult
+│   ├── transport       McpClientGateway(tools/call), RestApiClientGateway(http_method), McpAuthHeaders, McpCallResult
+│   ├── reshaping       DataReshaper(JSONPath 룰 엔진), ReshapingRule/ReshapingResult
+│   ├── repository      McpMasterRepository, McpPayloadLogRepository, McpPayloadLog, McpSourceQueryReader(INBOUND 원천)
+│   ├── fixture         McpFixtureCatalog(오프라인 결정적 응답)
+│   └── exception       McpApiNotFoundException, McpTransportException, ReshapingException
+├── llm                 LlmGateway(계약), AgentRunScope(호출 예산)
+│   ├── gateway         SpringAiLlmGateway, HeuristicLlmGateway
+│   ├── prompt          PromptBuilder, LlmPrompt
+│   ├── support         JsonSupport, LlmCallRecord, LlmCallRecorder
+│   └── exception       LlmException
+├── rag                 VerifiedSqlCacheService, VerifiedSqlEntry
+│   ├── similarity      SemanticSimilarity, LexicalSimilarity, SimilarityScore
+│   └── repository      VerifiedSqlRepository
+├── nl2sql              SchemaCatalog(8대 메타데이터)
+│   ├── heuristic       HeuristicQueryPlanner/SqlTemplates/AnswerComposer
+│   └── metadata        TableMetadata, ColumnMetadata, JoinHint
+├── gateway             SqlGuard(안전 검증), DbExecutor(JDBC), SelfRepairEngine(재시도 루프), GuardVerdict
+│   └── exception       SqlExecutionException
+├── eval                EvalService(배치), EvalBatch/EvalCaseResult/EvalTestCase
+│   ├── metric          ResultSetComparator(EX), HeuristicJudge(AA/FN)
+│   └── repository      EvalRepository
+├── audit
+│   └── repository      AuditRepository(실행/단계/LLM 이력), ConversationStore(멀티턴)
+├── config              AgentProperties(정책), ChatClientConfig(로컬 LLM), AsyncConfig
+│   └── seed            DemoDataSeeder(데모 기준 데이터)
+├── model               공용 도메인 모델 (QueryPlan, PreparedSql, LookupResult, AnswerOutcome ...)
+└── web                 AgentController, EvalController, CacheController, McpApiController
+    ├── dto             요청/응답 DTO
+    ├── mapper          WebMapper(도메인 결과 → 응답 변환)
+    └── handler         GlobalExceptionHandler(@RestControllerAdvice)
 ```
+
+- 패키지를 나눠도 **공개 API 는 그대로**입니다. 컨트롤러 URL·DB 스키마·JSON 응답 규격·오류 코드는 이동 전과 같고,
+  이동으로 필요해진 클래스만 `public` 으로 열었습니다.
 
 ---
 
@@ -755,3 +785,51 @@ curl -s -X POST http://localhost:8080/api/v1/mcp/apis -H 'Content-Type: applicat
   (환경변수 주입) 3종이며, 토큰 자동 갱신이 필요하면 `McpAuthHeaders` 에 한 곳만 추가하면 됩니다.
 - REST 응답이 `text/event-stream`/XML 인 경우 본문을 텍스트로 넘깁니다. 구조화가 필요하면 룰 대신
   파서를 게이트웨이에 추가해야 합니다.
+
+---
+
+## 17. 패키지 구조 리팩토링 — 핸들러·예외·패턴 소스 하위 분리 (2026-11-14 추가)
+
+### 17.1 목적
+
+`mcp`, `web`, `state` 같은 도메인 폴더를 열었을 때 **업무 흐름(Orchestrator/FlowService/Controller)과 핵심 도메인 모델**만 읽히도록
+정리했습니다. 예외·오류 핸들러·저수준 어댑터·픽스처·리포지토리·보조 모델처럼 반복되는 패턴 소스는 **한 단계 아래 하위 패키지**로
+내렸습니다. 패키지 경계를 나눠도 동작은 그대로입니다(공개 API·DB 스키마·응답 규격 불변).
+
+### 17.2 이동 내역 (전 → 후)
+
+| 전 | 후 | 옮긴 클래스 | 성격 |
+|---|---|---|---|
+| `mcp` | `mcp/exception` | McpApiNotFoundException, McpTransportException, ReshapingException | 예외 |
+| `mcp` | `mcp/transport` | McpClientGateway, RestApiClientGateway, McpAuthHeaders, McpCallResult, McpTransportMode, McpHttpMethod | 통신 어댑터 |
+| `mcp` | `mcp/reshaping` | DataReshaper, ReshapingRule, ReshapingResult | 변환 엔진·보조 모델 |
+| `mcp` | `mcp/repository` | McpMasterRepository, McpPayloadLogRepository, McpPayloadLog, McpSourceQueryReader | 리포지토리·원천 조회 |
+| `mcp` | `mcp/fixture` | McpFixtureCatalog | 픽스처 |
+| `web` | `web/handler` | GlobalExceptionHandler | 전역 오류 핸들러 |
+| `web` | `web/mapper` | WebMapper | 응답 변환 |
+| `state` | `state/trace` | TraceRecorder, TraceStep | 단계 이력 기록 |
+| `llm` | `llm/gateway` | SpringAiLlmGateway, HeuristicLlmGateway | 구현체 |
+| `llm` | `llm/prompt` | PromptBuilder, LlmPrompt | 프롬프트 조립 |
+| `llm` | `llm/support` | JsonSupport, LlmCallRecord, LlmCallRecorder | 직렬화·호출 기록 |
+| `llm` | `llm/exception` | LlmException | 예외 |
+| `rag` | `rag/similarity` | SemanticSimilarity, LexicalSimilarity, SimilarityScore | 유사도 구현·보조 모델 |
+| `rag` | `rag/repository` | VerifiedSqlRepository | 리포지토리 |
+| `nl2sql` | `nl2sql/heuristic` | HeuristicQueryPlanner, HeuristicSqlTemplates, HeuristicAnswerComposer | 규칙 기반 폴백 |
+| `nl2sql` | `nl2sql/metadata` | TableMetadata, ColumnMetadata, JoinHint | 보조 모델 |
+| `eval` | `eval/metric` | ResultSetComparator, HeuristicJudge | 지표 계산 |
+| `eval` | `eval/repository` | EvalRepository | 리포지토리 |
+| `gateway` | `gateway/exception` | SqlExecutionException | 예외 |
+| `audit` | `audit/repository` | AuditRepository, ConversationStore | 리포지토리 |
+| `config` | `config/seed` | DemoDataSeeder | 시드 픽스처 |
+
+상위 레벨에 남긴 것: `IncidentQueryFlowService`, `PipelineContext`, `PipelineResult`, `Stage`, `AgentQueryCommand`,
+`McpOrchestratorService`, `McpApiMaster`·`McpExecutionContext`·`McpExecutionResult`, `LlmGateway`·`AgentRunScope`,
+`VerifiedSqlCacheService`·`VerifiedSqlEntry`, `SchemaCatalog`, `SqlGuard`·`DbExecutor`·`SelfRepairEngine`·`GuardVerdict`,
+`EvalService`(및 배치·케이스 모델), 4개 Controller, `model/`의 공용 도메인 모델.
+
+### 17.3 검증
+
+- `mvn clean test` → **50개 전부 통과** (이동 전과 동일).
+- 앱 기동 후 공개 API 실측: `POST /api/v1/agent/query`(SUCCESS), `GET /api/v1/cache`, `GET /api/v1/mcp/apis`,
+  `POST /api/v1/mcp/execute/REST-CMDB-001`(FALLBACK, 응답 정제 동일), `GET /api/v1/eval/cases`,
+  미등록 API 호출 시 `404 {"code":"MCP_API_NOT_FOUND", ...}` — 이동 전과 같은 규격.

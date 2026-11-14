@@ -1,12 +1,14 @@
 package com.samsung.gsre.agent.eval;
 
 import com.samsung.gsre.agent.config.AgentProperties;
+import com.samsung.gsre.agent.eval.metric.ResultSetComparator;
+import com.samsung.gsre.agent.eval.repository.EvalRepository;
 import com.samsung.gsre.agent.gateway.DbExecutor;
 import com.samsung.gsre.agent.gateway.GuardVerdict;
 import com.samsung.gsre.agent.gateway.SqlGuard;
-import com.samsung.gsre.agent.llm.JsonSupport;
 import com.samsung.gsre.agent.llm.LlmGateway;
-import com.samsung.gsre.agent.llm.PromptBuilder;
+import com.samsung.gsre.agent.llm.prompt.PromptBuilder;
+import com.samsung.gsre.agent.llm.support.JsonSupport;
 import com.samsung.gsre.agent.model.JudgeVerdict;
 import com.samsung.gsre.agent.model.LookupResult;
 import com.samsung.gsre.agent.model.SqlExecutionResult;

@@ -2,8 +2,8 @@ package com.samsung.gsre.agent.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.samsung.gsre.agent.llm.HeuristicLlmGateway;
 import com.samsung.gsre.agent.llm.LlmGateway;
+import com.samsung.gsre.agent.llm.gateway.HeuristicLlmGateway;
 import com.samsung.gsre.agent.model.AnswerOutcome;
 import com.samsung.gsre.agent.model.CacheCandidate;
 import com.samsung.gsre.agent.model.ConversationTurn;

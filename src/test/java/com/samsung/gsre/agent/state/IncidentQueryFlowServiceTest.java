@@ -2,8 +2,9 @@ package com.samsung.gsre.agent.state;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.samsung.gsre.agent.audit.AuditRepository;
+import com.samsung.gsre.agent.audit.repository.AuditRepository;
 import com.samsung.gsre.agent.model.RunStatus;
+import com.samsung.gsre.agent.state.trace.TraceStep;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -9,7 +9,7 @@ import com.samsung.gsre.agent.model.SqlOrigin;
 import com.samsung.gsre.agent.state.PipelineContext;
 import com.samsung.gsre.agent.state.Stage;
 import com.samsung.gsre.agent.state.StageOutcome;
-import com.samsung.gsre.agent.state.TraceRecorder;
+import com.samsung.gsre.agent.state.trace.TraceRecorder;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;

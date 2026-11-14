@@ -1,12 +1,13 @@
 package com.samsung.gsre.agent.web;
 
-import com.samsung.gsre.agent.audit.AuditRepository;
+import com.samsung.gsre.agent.audit.repository.AuditRepository;
 import com.samsung.gsre.agent.state.AgentQueryCommand;
 import com.samsung.gsre.agent.state.IncidentQueryFlowService;
 import com.samsung.gsre.agent.state.PipelineResult;
 import com.samsung.gsre.agent.web.dto.QueryRequest;
 import com.samsung.gsre.agent.web.dto.QueryResponse;
 import com.samsung.gsre.agent.web.dto.RunDetailView;
+import com.samsung.gsre.agent.web.mapper.WebMapper;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;

@@ -2,8 +2,8 @@ package com.samsung.gsre.agent.state;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.samsung.gsre.agent.llm.LlmException;
 import com.samsung.gsre.agent.llm.LlmGateway;
+import com.samsung.gsre.agent.llm.exception.LlmException;
 import com.samsung.gsre.agent.model.AnswerOutcome;
 import com.samsung.gsre.agent.model.CacheCandidate;
 import com.samsung.gsre.agent.model.ConversationTurn;

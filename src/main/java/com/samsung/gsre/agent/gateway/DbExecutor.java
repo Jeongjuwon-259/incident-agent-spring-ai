@@ -1,6 +1,7 @@
 package com.samsung.gsre.agent.gateway;
 
 import com.samsung.gsre.agent.config.AgentProperties;
+import com.samsung.gsre.agent.gateway.exception.SqlExecutionException;
 import com.samsung.gsre.agent.model.SqlExecutionResult;
 import com.samsung.gsre.agent.nl2sql.SchemaCatalog;
 import java.math.BigDecimal;

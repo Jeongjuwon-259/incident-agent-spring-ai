@@ -7,6 +7,7 @@ import com.samsung.gsre.agent.web.dto.EvalBatchRequest;
 import com.samsung.gsre.agent.web.dto.EvalBatchView;
 import com.samsung.gsre.agent.web.dto.EvalCaseRequest;
 import com.samsung.gsre.agent.web.dto.EvalResultView;
+import com.samsung.gsre.agent.web.mapper.WebMapper;
 import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;

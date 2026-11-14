@@ -9,6 +9,7 @@ import com.samsung.gsre.agent.model.PreparedSql;
 import com.samsung.gsre.agent.model.QueryPlan;
 import com.samsung.gsre.agent.model.ReuseDecision;
 import com.samsung.gsre.agent.model.RunStatus;
+import com.samsung.gsre.agent.state.trace.TraceStep;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
