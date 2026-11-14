@@ -6,7 +6,8 @@ G-SRE 서비스맵 포털 **장애 지원 AI Agent** — Java 21 / Spring Boot 3
 
 - Flowise/LangGraph 없이 **Java 코드로 흐름을 명시적으로 제어**합니다.
 - Mac mini 로컬 LLM(Ollama, vLLM, llama.cpp, LM Studio, Qwen, Muse …)을 **OpenAI 호환 엔드포인트**로 붙입니다. 주소/모델은 환경변수 한 줄로 교체됩니다.
-- 모델이 없어도 `AGENT_LLM_MODE=offline` 으로 **전체 파이프라인·감사로그·품질평가가 끝까지 동작**합니다 (규칙 기반 결정적 구현). 테스트 22개가 이 모드로 실행됩니다.
+- 모델이 없어도 `AGENT_LLM_MODE=offline` 으로 **전체 파이프라인·감사로그·품질평가가 끝까지 동작**합니다 (규칙 기반 결정적 구현). 테스트 50개가 이 모드로 실행됩니다.
+- **REST API + MCP 통합 확장**: 같은 테이블(`svcm_tb_mcp_api_master`)의 `transport_type`/`http_method` 값만으로 MCP(tools/call)와 순수 REST(GET/POST/PUT/PATCH/DELETE)를 함께 구동합니다. ([§16](#16-rest-api--mcp-테이블-기반-통합-확장-2026-11-14-추가))
 - H2 임베디드 DB + 시드 데이터(8대 테이블, 검증 SQL 6건, 골든셋 6건)로 받자마자 확인 가능합니다.
 - **MCP API 확장**: 테이블 등록만으로 외부 도구를 늘리고, 선언적 JSONPath 룰로 요청/응답을 양방향 Reshaping 합니다. ([§15](#15-mcp-api-확장과-양방향-reshaping-2026-11-13-추가))
 
@@ -364,8 +365,9 @@ mvn test
 | `LlmUnavailableFlowTest` (1) | 로컬 LLM 연결 실패 시 FAILED + 조치 안내 (SUCCESS 로 덮이지 않음) |
 | `ContextSmokeTest` (1) | 컨텍스트 기동 + 파이프라인 답변 |
 | `McpReshapingFlowTest` (16) | K8s Raw→Pod 압축, 로우→tools/call 변환, 필수필드/문법 오류, 3방향 실행·감사로그, 실제 HTTP/SSE 통신, 등록/실행/404/검증 |
+| `RestApiIntegrationTest` (12) | REST 시드 6건 조회, GET 경로변수·Query String·헤더 실통신, POST 순수 REST JSON, BIDIRECTIONAL webhook, PUT/DELETE/PATCH 메서드별 전송 형태, HTTP 500 비은폐, 오프라인 픽스처 결정성, 등록 검증 400 3종 |
 
-현재 **38개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
+현재 **50개 테스트 전부 통과** (오프라인 모드, H2 in-memory).
 
 ---
 
@@ -432,7 +434,8 @@ mvn test
 |---|---|
 | `api_id` / `api_name` / `tool_name` | API 식별자, 표시명, MCP 도구명 |
 | `direction` | `OUTBOUND` / `INBOUND` / `BIDIRECTIONAL` |
-| `transport_type` / `endpoint_url` | `HTTP`(Streamable HTTP), 엔드포인트 |
+| `transport_type` / `endpoint_url` | `HTTP`/`MCP`/`SSE`(MCP tools/call), `REST`/`REST_API`(순수 REST), 엔드포인트. `{appId}` 경로변수 지원 (§16) |
+| `http_method` / `headers_config` | REST 전용: `GET`/`POST`/`PUT`/`PATCH`/`DELETE`, 커스텀 헤더 JSON (§16) |
 | `auth_type` / `auth_config` | `NONE`/`BEARER`/`API_KEY`/`BASIC`, **시크릿이 아니라 환경변수 이름** |
 | `request_schema` | 입력 파라미터 JSON Schema (문서·검증용) |
 | `request_reshaping_rule` | 요청/원천 로우 → MCP payload 룰 (CLOB) |
@@ -448,6 +451,7 @@ mvn test
 | `raw_payload_in` / `reshaped_payload_in` | 원본 입력(DB 로우 또는 파라미터)과 변환 결과 |
 | `raw_payload_out` / `reshaped_payload_out` | 원본 응답과 정제 결과 |
 | `status_code` / `duration_ms` / `error_message` | HTTP 상태(폴백이면 0), 소요시간, 사유 |
+| `transport_type` / `http_method` | 실행에 실제로 쓰인 프로토콜과 메서드 (MCP 면 메서드 null) |
 
 ### 15.3 Reshaping 룰 문법
 
@@ -480,7 +484,7 @@ mvn test
 | `fields[].transform` | `TRIM` `UPPER` `LOWER` `TO_STRING` `TO_NUMBER` `TO_INT` `TO_BOOLEAN` | 값 변환 |
 | `fields[].aggregate` | `SUM` `COUNT` `AVG` `MIN` `MAX` | 여러 값을 하나로 집계 |
 | `fields[].default` / `required` | JSON / bool | 원천 부재 시 대체값 / 실패 처리 |
-| `envelope` | `{type, tool, argumentsKey}` | MCP `tools/call` 규격으로 감싸기 (INBOUND 필수) |
+| `envelope` | `MCP_TOOL_CALL` / `REST_JSON` | 결과를 전송 규격으로 감싸기. MCP 는 `{tool, arguments}`, REST 는 `{payloadKey: [...], attributes:{...}}` (§16) |
 
 룰 오류(깨진 JSON, 잘못된 JSONPath, 필수 필드 누락)는 조용히 넘기지 않고 **필드명과 경로를 포함한 400** 으로 돌아옵니다.
 
@@ -597,3 +601,157 @@ curl -s 'http://localhost:8080/api/v1/mcp/logs?apiId=MCP-K8S-001&limit=5'
 - 응답이 매우 큰 경우(수 MB) 원본은 로그에서 잘립니다. 원본 보관이 필요하면 Object Storage 로 분리해야 합니다.
 - MCP 리소스(`resources/list`)·프롬프트 기능은 다루지 않고 `tools/call` 만 사용합니다.
 - 에이전트 파이프라인(`IncidentQueryFlowService`)과의 자동 연결은 아직 없습니다. MCP 실행은 현재 관리/실행 API 로 호출하며, 답변 컨텍스트에 넣으려면 `PipelineContext` 에 MCP 실행 단계를 추가하면 됩니다.
+
+---
+
+## 16. REST API + MCP 테이블 기반 통합 확장 (2026-11-14 추가)
+
+§15 까지의 MCP 어댑터를 **프로토콜 하나 더**로 넓힌 것이 아니라, "전송 방식도 테이블 데이터" 로
+일반화한 단계입니다. 같은 테이블 한 행에서 `transport_type` 과 `http_method` 만 바꾸면
+MCP(JSON-RPC `tools/call`)로도, 순수 REST API 로도 동작합니다. **Java 코드의 분기는 한 줄**입니다.
+
+```java
+return api.isRestTransport()
+        ? restGateway.call(api, request, params)   // REST / REST_API
+        : gateway.call(api, request);              // MCP / HTTP / SSE
+```
+
+### 16.1 MCP 와 REST 의 차이 (테이블 값이 정한다)
+
+| 항목 | MCP (`transport_type=MCP/HTTP/SSE`) | REST (`transport_type=REST/REST_API`) |
+|---|---|---|
+| 게이트웨이 | `McpClientGateway` | `RestApiClientGateway` |
+| 요청 본문 | JSON-RPC 2.0 `tools/call` 봉투 | 없음(순수 JSON). 봉투를 만들지 않는다 |
+| HTTP 메서드 | 항상 `POST` | `http_method` (`GET` `POST` `PUT` `PATCH` `DELETE`) |
+| 파라미터 전달 | `params.arguments` 객체 | 경로변수 `{appId}` 치환 + (GET/DELETE) Query String + JSON 본문 |
+| 커스텀 헤더 | 없음 (인증 헤더만) | `headers_config` JSON 객체 |
+| 응답 해석 | `result.content[].text` 까지 벗김 (JSON/SSE) | 봉투 없음. JSON 그대로 (정제는 룰이) |
+| 룰 envelope | `{"type":"MCP_TOOL_CALL","tool":...,"argumentsKey":...}` | `{"type":"REST_JSON","payloadKey":"incidents","attributes":{"source":"gsre-agent"}}` |
+
+두 게이트웨이는 같은 `McpCallResult` 를 돌려주므로, **Orchestrator·DataReshaper·감사로그·픽스처 폴백은
+한 벌만** 있습니다. 새 프로토콜을 더할 때도 게이트웨이 하나와 분기 한 줄이면 됩니다.
+
+### 16.2 스키마 추가 컬럼
+
+`svcm_tb_mcp_api_master`
+
+| 컬럼 | 기본값 | 설명 |
+|---|---|---|
+| `transport_type` | `HTTP` | `MCP` / `HTTP` / `SSE` (MCP tools/call) · `REST` / `REST_API` (순수 REST) |
+| `http_method` | `POST` | REST 전용. `GET`·`DELETE` 는 본문 없이 남은 파라미터를 Query String 으로 보낸다 |
+| `headers_config` | null | REST 전용. 요청에 붙일 헤더 JSON. **시크릿은 쓰지 않는다** (`auth_config` 참조) |
+
+`svcm_tb_mcp_payload_log`
+
+| 컬럼 | 설명 |
+|---|---|
+| `transport_type` / `http_method` | 이번 실행에 실제로 쓰인 프로토콜/메서드 (MCP 면 `http_method` 는 null) |
+
+기존 `agent-db` 파일을 쓰던 환경은 `schema.sql` 맨 끝의 1회성 `ALTER TABLE` 문(4줄)을 H2 콘솔에서
+실행하거나 파일을 지우고 다시 기동하면 됩니다. MySQL 운영 DDL 은 같은 블록 주석을 참고하세요.
+
+### 16.3 REST 시드 3건 (`data.sql`)
+
+기존 MCP 시드 3건(`MCP-K8S-001`, `MCP-JIRA-001`, `MCP-ALERT-001`)은 그대로 두고, 실제 G-SRE 도메인
+테이블에 붙는 REST 3건을 추가했습니다.
+
+| api_id | 방향 | 프로토콜 | 원천 / 대상 | 룰이 하는 일 |
+|---|---|---|---|---|
+| `REST-CMDB-001` | OUTBOUND | `GET /api/cmdb/apps/{appId}` | CMDB 앱 상세 | `{appId}` 경로변수 + `include`,`depth` Query String. 수 KB 원본(owners/deps/metrics/auditLog) → 앱ID·앱명·담당자·부서·티어·상태·열린장애 11필드 |
+| `REST-INCIDENT-001` | INBOUND | `POST /api/incidents/sync` | `svcm_tb_jira_issue` (issue_type=`INCIDENT`) `LEFT JOIN` 앱/사용자 | 5건 → `{"source":"gsre-agent","schemaVersion":"1.0","incidents":[...]}` (JSON-RPC 봉투 없음) → 응답의 `syncedCount/batchId/status` 만 보관 |
+| `REST-NOTIFY-001` | BIDIRECTIONAL | `POST /api/v1/webhooks/sre-alert` | `svcm_tb_app_master` CRITICAL·OPERATING + 열린 장애 수 | 2건 → `{"source":"gsre-agent","eventType":"asset.health","alerts":[{appId,severity,openIncidents}]}` → `notified/channel/receiptId` 정제. `API_KEY`(`MCP_ALERT_API_KEY`) 헤더 |
+
+`source_query` 는 `schema.sql` 에 실제로 있는 테이블·컬럼만 사용합니다. (`svcm_tb_app_master`,
+`svcm_tb_jira_issue`, `svcm_tb_user_info_master`)
+
+### 16.4 사용 예
+
+```bash
+# CMDB 상세 (GET): appId 는 경로변수, 나머지는 Query String
+curl -s -X POST http://localhost:8080/api/v1/mcp/execute/REST-CMDB-001 \
+  -H 'Content-Type: application/json' \
+  -d '{"params":{"appId":"APP-1001"},"runId":"RUN-20261114093000"}'
+```
+
+```json
+{
+  "apiId": "REST-CMDB-001",
+  "transportType": "REST",
+  "httpMethod": "GET",
+  "status": "SUCCESS",
+  "statusCode": 200,
+  "request": {"appId": "APP-1001", "include": "owners,deps,metrics", "depth": 2},
+  "response": {
+    "appId": "APP-1001", "appName": "서비스맵포털", "appType": "WEB", "serviceName": "서비스맵포털",
+    "owner": "김민수", "ownerDept": "SRE플랫폼팀", "tier": "TIER-1",
+    "criticality": "CRITICAL", "status": "OPERATING", "openIncidents": 1, "restartCount": 9
+  },
+  "stages": [
+    "1 기준정보: REST-CMDB-001 (OUTBOUND, REST, GET)",
+    "2 요청 Reshaping: 호출 파라미터 → REST GET 파라미터 필드 3개",
+    "3 통신: cmdb.app.get → GET http://localhost:18080/api/cmdb/apps/{appId} [200] 87ms",
+    "4 응답 Reshaping: raw 1687자 → 결과 11건",
+    "5 감사로그: logId=12, status=SUCCESS"
+  ]
+}
+```
+
+```bash
+# 장애 이력 동기화 (POST, 순수 REST JSON)
+curl -s -X POST http://localhost:8080/api/v1/mcp/execute/REST-INCIDENT-001 \
+  -H 'Content-Type: application/json' -d '{}'
+# → 요청 본문: {"source":"gsre-agent","schemaVersion":"1.0","incidents":[{...} × 5]}
+# → 응답     : {"syncedCount":5,"batchId":"INC-BATCH-261114-0001","status":"ACCEPTED"}
+
+# SRE 알람 Webhook (BIDIRECTIONAL)
+curl -s -X POST http://localhost:8080/api/v1/mcp/execute/REST-NOTIFY-001 \
+  -H 'Content-Type: application/json' -d '{}'
+
+# 새 REST API 등록 (코드 배포 없이). httpMethod/headersConfig 가 그대로 전송 방식을 바꾼다.
+curl -s -X POST http://localhost:8080/api/v1/mcp/apis -H 'Content-Type: application/json' -d '{
+  "apiId":"REST-CMDB-002","apiName":"CMDB 앱 목록","toolName":"cmdb.app.list",
+  "direction":"OUTBOUND","transportType":"REST","httpMethod":"GET",
+  "endpointUrl":"http://localhost:18080/api/cmdb/apps",
+  "headersConfig":"{\"X-GSRE-Source\":\"incident-agent-spring-ai\"}",
+  "responseReshapingRule":"{\"mode\":\"COLLECTION\",\"rootPath\":\"$.data.items\",\"itemPath\":\"$[*]\",\"fields\":[{\"target\":\"appId\",\"source\":\"$.appId\"},{\"target\":\"appName\",\"source\":\"$.appName\"}]}"
+}'
+```
+
+### 16.5 전송 규칙 (게이트웨이 동작)
+
+- **경로변수**: `endpoint_url` 의 `{name}` 을 `params`(또는 Reshaping 결과) 값으로 치환합니다. 값은
+  경로 세그먼트로 URL 인코딩되고(공백 → `%20`), 값을 찾지 못하면 502 `MCP_TRANSPORT_ERROR` 로
+  드러납니다(조용히 빈 값으로 호출하지 않음).
+- **Query String**: `GET`/`DELETE` 는 본문을 보내지 않고, 경로변수로 쓰인 키를 뺀 나머지 파라미터를
+  `k=v` 로 붙입니다. 배열 값은 `a,b,c` 로 합칩니다.
+- **본문**: `POST`/`PUT`/`PATCH` 는 Reshaping 결과 JSON 을 `Content-Type: application/json` 으로 보냅니다.
+- **헤더**: `headers_config` → `auth_config`(환경변수 기반 BEARER/API_KEY/BASIC) 순으로 붙습니다.
+  같은 이름이면 인증 헤더가 이깁니다. 인증 값은 요청·응답·감사로그 어디에도 남지 않습니다.
+- **등록 검증(400)**: 지원하지 않는 `http_method`, JSON 객체가 아닌 `headers_config`,
+  본문 없는 `GET`/`DELETE` 로 `INBOUND`/`BIDIRECTIONAL` 을 등록하는 경우.
+- **실패**: AUTO 모드는 연결 자체가 실패할 때만 결정적 픽스처로 대체(`FALLBACK`)하고,
+  HTTP 4xx/5xx 는 `FAILED` + `error_message=HTTP nnn` 으로 남깁니다. HTTP 모드는 폴백 없음.
+
+### 16.6 검증
+
+`RestApiIntegrationTest` (12) 가 embedded `com.sun.net.httpserver.HttpServer` 를 시드에 적힌 포트(18080)에
+띄우고 `agent.mcp.transport-mode=HTTP` 로 실제 통신하며 서버 쪽에서 다음을 확인합니다.
+
+- GET 의 메서드·경로(`/api/cmdb/apps/APP%201003`)·Query String·커스텀 헤더·본문 없음
+- POST 본문에 `jsonrpc`/`tools/call` 이 없고 `source`,`incidents[]` 만 있는지 (5건, INCIDENT 만)
+- BIDIRECTIONAL webhook 의 `alerts[]` 2건과 `notified/channel/receiptId` 정제
+- `PUT` 등록 직후 그 메서드/헤더로 나가는지, `DELETE` 는 Query String·`PATCH` 는 JSON 본문으로 나가는지
+- HTTP 500 이 FALLBACK 으로 덮이지 않는지, 오프라인 픽스처가 결정적인지
+- 감사 로그의 `transport_type`/`http_method` 기록
+
+전체 **50개 테스트 통과** (기존 38개 + REST 12개).
+
+### 16.7 한계
+
+- 오프라인 픽스처는 결정적이므로 경로변수를 바꿔도 같은 Raw(APP-1001 기준)를 돌려줍니다. 실제 값
+  분기는 HTTP 모드에서만 일어납니다.
+- `PATCH`/`PUT` 의 부분 갱신 규약(JSON Merge Patch 등)은 룰로 본문을 만드는 수준까지만 다룹니다.
+- OAuth2 클라이언트 크리덴셜 토큰 발급·갱신은 아직 없습니다. `auth_type` 은 `BEARER`/`API_KEY`/`BASIC`
+  (환경변수 주입) 3종이며, 토큰 자동 갱신이 필요하면 `McpAuthHeaders` 에 한 곳만 추가하면 됩니다.
+- REST 응답이 `text/event-stream`/XML 인 경우 본문을 텍스트로 넘깁니다. 구조화가 필요하면 룰 대신
+  파서를 게이트웨이에 추가해야 합니다.

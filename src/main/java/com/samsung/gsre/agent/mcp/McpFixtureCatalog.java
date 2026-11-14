@@ -6,10 +6,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 /**
- * 오프라인 결정적 MCP 응답 픽스처.
+ * 오프라인 결정적 MCP/REST 응답 픽스처.
  *
- * <p>데모·테스트에서 외부 K8s/Jira/관제 서버가 없어도 <b>같은 Raw 응답 → 같은 Reshaping 결과</b>를
+ * <p>데모·테스트에서 외부 K8s/Jira/관제/CMDB 서버가 없어도 <b>같은 Raw 응답 → 같은 Reshaping 결과</b>를
  * 재현한다. 난수·현재시각을 쓰지 않으므로 로그 비교가 가능하다.</p>
+ *
+ * <p>MCP 도구는 JSON-RPC 2.0 봉투로 감싸고, REST API 는 봉투 없이 순수 JSON 본문을 돌려준다.
+ * (게이트웨이 두 개의 차이가 픽스처에도 그대로 드러나야 감사 로그 비교가 쉽다.)</p>
  *
  * <p>운영 모드(HTTP)에서는 이 클래스가 호출되지 않는다.</p>
  */
@@ -27,7 +30,10 @@ public class McpFixtureCatalog {
             case "MCP-K8S-001" -> wrap(K8S_POD_LIST);
             case "MCP-JIRA-001" -> wrap(JIRA_ACK);
             case "MCP-ALERT-001" -> wrap(ALERT_ACK);
-            default -> wrap(genericAck(api));
+            case "REST-CMDB-001" -> CMDB_APP_DETAIL;
+            case "REST-INCIDENT-001" -> INCIDENT_SYNC_ACK;
+            case "REST-NOTIFY-001" -> WEBHOOK_ACK;
+            default -> api.isRestTransport() ? restGenericAck(api) : wrap(genericAck(api));
         };
     }
 
@@ -51,6 +57,11 @@ public class McpFixtureCatalog {
     private String genericAck(McpApiMaster api) {
         return "{\"ok\":true,\"apiId\":\"" + api.apiId() + "\",\"tool\":\"" + api.toolName()
                 + "\",\"mode\":\"OFFLINE_FIXTURE\"}";
+    }
+
+    /** REST 게이트웨이는 JSON-RPC 봉투를 벗기지 않으므로 봉투 없는 JSON 을 그대로 준다. */
+    private String restGenericAck(McpApiMaster api) {
+        return genericAck(api);
     }
 
     /**
@@ -217,5 +228,76 @@ public class McpFixtureCatalog {
     private static final String ALERT_ACK = """
             {"accepted": 2, "channel": "#sre-alerts", "messageId": "ALT-260113-7781",
              "server": "monitor-mcp-fixture"}
+            """;
+
+    /**
+     * CMDB REST API 의 앱 상세 Raw 응답. 실제 CMDB 처럼 owners/deps/metrics/auditLog/config 등
+     * 쓸모없는 필드가 잔뜩 붙어 있고, Reshaping 룰이 이 중 11개만 남긴다.
+     * (오프라인 픽스처는 결정적이므로 appId 기본값 APP-1001 기준이다.)
+     */
+    private static final String CMDB_APP_DETAIL = """
+            {
+              "requestId": "cmdb-7f3c19a2",
+              "resultCode": "OK",
+              "serverTime": "2026-11-14T09:12:41+09:00",
+              "data": {
+                "appId": "APP-1001",
+                "appName": "서비스맵포털",
+                "appType": "WEB",
+                "serviceId": "SVC-01",
+                "serviceName": "서비스맵포털",
+                "domainName": "svcm.samsung.com",
+                "tier": "TIER-1",
+                "criticality": "CRITICAL",
+                "status": "OPERATING",
+                "environment": "PROD",
+                "owners": [
+                  {"userId": "U1001", "name": "김민수", "deptName": "SRE플랫폼팀",
+                   "email": "kim.minsu@samsung.com", "phone": "010-1234-5678", "role": "OWNER"},
+                  {"userId": "U1005", "name": "한도윤", "deptName": "SRE플랫폼팀",
+                   "email": "han.doyun@samsung.com", "phone": "010-5678-9012", "role": "OPERATOR"}
+                ],
+                "metrics": {
+                  "openIncidents": 1,
+                  "restartCount": 9,
+                  "cpuUsage": 41.7,
+                  "memUsage": 68.2,
+                  "p95LatencyMs": 312
+                },
+                "dependencies": [
+                  {"appId": "APP-1002", "type": "HTTP", "direction": "OUT", "timeoutMs": 3000},
+                  {"appId": "APP-1005", "type": "KAFKA", "topic": "svcm.portal.events"}
+                ],
+                "config": {
+                  "replicas": 3,
+                  "image": "registry.local/svcm/portal:2.5.1",
+                  "ingressHost": "svcm.samsung.com",
+                  "env": [
+                    {"key": "SPRING_PROFILES_ACTIVE", "value": "prod"},
+                    {"key": "JAVA_OPTS", "value": "-Xms2g -Xmx2g"}
+                  ]
+                },
+                "tags": ["portal", "svcm", "tier1", "sre"],
+                "auditLog": [
+                  {"at": "2026-11-13T18:22:10+09:00", "by": "U1005", "action": "CONFIG_CHANGE",
+                   "detail": "replicas 2 -> 3"},
+                  {"at": "2026-11-12T23:41:07+09:00", "by": "U1001", "action": "DEPLOY",
+                   "detail": "portal 2.5.0 -> 2.5.1"}
+                ]
+              },
+              "paging": {"page": 1, "size": 1, "total": 1}
+            }
+            """;
+
+    /** 장애 이력 동기화 REST API 의 배치 접수 응답. */
+    private static final String INCIDENT_SYNC_ACK = """
+            {"syncedCount": 5, "batchId": "INC-BATCH-261114-0001", "status": "ACCEPTED",
+             "processedAt": "2026-11-14T09:12:41+09:00", "server": "incident-rest-fixture"}
+            """;
+
+    /** SRE 알람 Webhook 의 접수 응답. */
+    private static final String WEBHOOK_ACK = """
+            {"notified": 2, "channel": "#sre-alerts", "status": "SENT",
+             "receiptId": "WH-261114-4412", "server": "webhook-rest-fixture"}
             """;
 }

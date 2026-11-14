@@ -117,31 +117,9 @@ public class McpClientGateway {
         return builder.build();
     }
 
-    /** auth_config 는 시크릿이 아니라 환경변수 참조다. 값이 없으면 헤더만 생략하고 진행한다. */
+    /** auth_config 는 시크릿이 아니라 환경변수 참조다. 해석 규칙은 McpAuthHeaders 에 한 벌만 둔다. */
     private void applyAuth(McpApiMaster api, HttpRequest.Builder builder) {
-        String authType = api.authType();
-        if (authType == null || "NONE".equalsIgnoreCase(authType) || api.authConfig() == null
-                || api.authConfig().isBlank()) {
-            return;
-        }
-        try {
-            JsonNode config = mapper.readTree(api.authConfig());
-            String envVar = config.path("envVar").asText("");
-            String secret = envVar.isBlank() ? "" : System.getenv(envVar);
-            if (secret == null || secret.isBlank()) {
-                log.warn("[mcp] 인증 환경변수가 없어 헤더를 생략합니다 apiId={} envVar={}", api.apiId(), envVar);
-                return;
-            }
-            switch (authType.toUpperCase()) {
-                case "BEARER" -> builder.header("Authorization", "Bearer " + secret);
-                case "API_KEY" -> builder.header(config.path("header").asText("X-Api-Key"), secret);
-                case "BASIC" -> builder.header("Authorization",
-                        "Basic " + java.util.Base64.getEncoder().encodeToString(secret.getBytes()));
-                default -> log.warn("[mcp] 알 수 없는 auth_type={} apiId={}", authType, api.apiId());
-            }
-        } catch (Exception e) {
-            log.warn("[mcp] auth_config 해석 실패 apiId={}: {}", api.apiId(), e.getMessage());
-        }
+        McpAuthHeaders.resolve(api, mapper).forEach(builder::header);
     }
 
     // ------------------------------------------------------------------

@@ -11,10 +11,16 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
-/** MCP payload 감사 로그 저장소. 실패한 호출도 반드시 1행 남긴다. */
+/** MCP/REST payload 감사 로그 저장소. 실패한 호출도 반드시 1행 남긴다. */
 @Repository
 @RequiredArgsConstructor
 public class McpPayloadLogRepository {
+
+    private static final String COLUMNS = """
+            log_id, call_id, run_id, api_id, direction, transport_type, http_method,
+            raw_payload_in, reshaped_payload_in, raw_payload_out, reshaped_payload_out,
+            status_code, duration_ms, error_message, created_at
+            """;
 
     private final JdbcTemplate jdbc;
 
@@ -23,25 +29,28 @@ public class McpPayloadLogRepository {
         jdbc.update(connection -> {
             var ps = connection.prepareStatement("""
                     INSERT INTO svcm_tb_mcp_payload_log
-                        (call_id, run_id, api_id, direction, raw_payload_in, reshaped_payload_in,
+                        (call_id, run_id, api_id, direction, transport_type, http_method,
+                         raw_payload_in, reshaped_payload_in,
                          raw_payload_out, reshaped_payload_out, status_code, duration_ms, error_message, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP)
                     """, new String[]{"log_id"});
             ps.setString(1, log.callId());
             ps.setString(2, log.runId());
             ps.setString(3, log.apiId());
             ps.setString(4, log.direction());
-            ps.setString(5, log.rawPayloadIn());
-            ps.setString(6, log.reshapedPayloadIn());
-            ps.setString(7, log.rawPayloadOut());
-            ps.setString(8, log.reshapedPayloadOut());
+            ps.setString(5, log.transportType());
+            ps.setString(6, log.httpMethod());
+            ps.setString(7, log.rawPayloadIn());
+            ps.setString(8, log.reshapedPayloadIn());
+            ps.setString(9, log.rawPayloadOut());
+            ps.setString(10, log.reshapedPayloadOut());
             if (log.statusCode() == null) {
-                ps.setNull(9, java.sql.Types.INTEGER);
+                ps.setNull(11, java.sql.Types.INTEGER);
             } else {
-                ps.setInt(9, log.statusCode());
+                ps.setInt(11, log.statusCode());
             }
-            ps.setLong(10, log.durationMs());
-            ps.setString(11, log.errorMessage());
+            ps.setLong(12, log.durationMs());
+            ps.setString(13, log.errorMessage());
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -51,25 +60,18 @@ public class McpPayloadLogRepository {
     public List<McpPayloadLog> findRecent(String apiId, int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 200));
         if (apiId == null || apiId.isBlank()) {
-            return jdbc.query("""
-                    SELECT log_id, call_id, run_id, api_id, direction, raw_payload_in, reshaped_payload_in,
-                           raw_payload_out, reshaped_payload_out, status_code, duration_ms, error_message, created_at
-                    FROM svcm_tb_mcp_payload_log ORDER BY log_id DESC LIMIT ?
-                    """, (rs, rowNum) -> map(rs), safeLimit);
+            return jdbc.query("SELECT " + COLUMNS
+                    + " FROM svcm_tb_mcp_payload_log ORDER BY log_id DESC LIMIT ?",
+                    (rs, rowNum) -> map(rs), safeLimit);
         }
-        return jdbc.query("""
-                SELECT log_id, call_id, run_id, api_id, direction, raw_payload_in, reshaped_payload_in,
-                       raw_payload_out, reshaped_payload_out, status_code, duration_ms, error_message, created_at
-                FROM svcm_tb_mcp_payload_log WHERE api_id = ? ORDER BY log_id DESC LIMIT ?
-                """, (rs, rowNum) -> map(rs), apiId, safeLimit);
+        return jdbc.query("SELECT " + COLUMNS
+                + " FROM svcm_tb_mcp_payload_log WHERE api_id = ? ORDER BY log_id DESC LIMIT ?",
+                (rs, rowNum) -> map(rs), apiId, safeLimit);
     }
 
     public List<McpPayloadLog> findByCallId(String callId) {
-        return jdbc.query("""
-                SELECT log_id, call_id, run_id, api_id, direction, raw_payload_in, reshaped_payload_in,
-                       raw_payload_out, reshaped_payload_out, status_code, duration_ms, error_message, created_at
-                FROM svcm_tb_mcp_payload_log WHERE call_id = ?
-                """, (rs, rowNum) -> map(rs), callId);
+        return jdbc.query("SELECT " + COLUMNS + " FROM svcm_tb_mcp_payload_log WHERE call_id = ?",
+                (rs, rowNum) -> map(rs), callId);
     }
 
     public int count() {
@@ -94,6 +96,8 @@ public class McpPayloadLogRepository {
                 statusCode,
                 rs.getLong("duration_ms"),
                 rs.getString("error_message"),
-                created == null ? Instant.now() : created.toInstant());
+                created == null ? Instant.now() : created.toInstant(),
+                rs.getString("transport_type"),
+                rs.getString("http_method"));
     }
 }

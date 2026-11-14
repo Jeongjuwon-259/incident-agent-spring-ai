@@ -25,10 +25,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * MCP API 확장 관리 + 실행 API.
+ * MCP/REST API 확장 관리 + 실행 API.
  *
  * <ul>
- *   <li>{@code /apis} — 도구 등록/조회. 코드 배포 없이 새 연동을 추가하는 창구.</li>
+ *   <li>{@code /apis} — 도구 등록/조회. 코드 배포 없이 새 연동(MCP·REST)을 추가하는 창구.</li>
  *   <li>{@code /execute/{apiId}} — 등록된 룰대로 Reshaping 후 통신하고, 감사 로그를 남긴다.</li>
  *   <li>{@code /logs} — raw/reshaped 비교 조회.</li>
  * </ul>
@@ -70,7 +70,9 @@ public class McpApiController {
                 request.description(),
                 request.createdBy(),
                 Instant.now(),
-                Instant.now());
+                Instant.now(),
+                request.httpMethod(),
+                request.headersConfig());
         return ResponseEntity.status(HttpStatus.CREATED).body(toView(orchestrator.register(api)));
     }
 
@@ -94,20 +96,22 @@ public class McpApiController {
                 api.apiId(), api.apiName(), api.toolName(), api.direction().name(), api.transportType(),
                 api.endpointUrl(), api.authType(), api.timeoutMs(), api.active(), api.description(),
                 api.requestSchema(), api.requestReshapingRule(), api.responseReshapingRule(),
-                api.sourceQuery(), api.createdAt());
+                api.sourceQuery(), api.createdAt(), api.httpMethod(), api.headersConfig());
     }
 
     private static McpExecutionView toView(McpExecutionResult result) {
         return new McpExecutionView(
                 result.callId(), result.logId(), result.apiId(), result.apiName(), result.toolName(),
                 result.direction().name(), result.status().name(), result.statusCode(), result.durationMs(),
-                result.request(), result.response(), result.stages(), result.warnings(), result.errorMessage());
+                result.request(), result.response(), result.stages(), result.warnings(), result.errorMessage(),
+                result.transportType(), result.httpMethod());
     }
 
     private static McpPayloadLogView toView(McpPayloadLog log) {
         return new McpPayloadLogView(
                 log.logId(), log.callId(), log.runId(), log.apiId(), log.direction(), log.statusCode(),
                 log.durationMs(), log.errorMessage(), log.createdAt(),
-                log.rawPayloadIn(), log.reshapedPayloadIn(), log.rawPayloadOut(), log.reshapedPayloadOut());
+                log.rawPayloadIn(), log.reshapedPayloadIn(), log.rawPayloadOut(), log.reshapedPayloadOut(),
+                log.transportType(), log.httpMethod());
     }
 }

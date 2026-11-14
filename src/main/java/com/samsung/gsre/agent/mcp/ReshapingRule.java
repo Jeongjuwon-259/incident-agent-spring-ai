@@ -28,6 +28,12 @@ import java.util.Locale;
  *
  * <p>룰 문법은 방향과 무관하다. INBOUND 는 DB 로우(JSON 배열)에, OUTBOUND 는 외부 응답 JSON 에 같은
  * 엔진을 적용한다. 이것이 "양방향" 의 실체다.</p>
+ *
+ * <p>envelope 는 결과를 어떤 전송 규격으로 감쌀지만 정한다.</p>
+ * <ul>
+ *   <li>{@code MCP_TOOL_CALL} — MCP tools/call ({@code {tool, arguments}})</li>
+ *   <li>{@code REST_JSON} — 순수 REST JSON 본문. {@code attributes} 고정 필드 + {@code payloadKey} 배열</li>
+ * </ul>
  */
 public record ReshapingRule(
         String version,
@@ -65,10 +71,30 @@ public record ReshapingRule(
                             Aggregate aggregate, JsonNode defaultValue, boolean required) {
     }
 
-    /** 결과를 MCP tools/call 규격({tool, arguments})으로 감싼다. */
-    public record Envelope(String type, String tool, String argumentsKey) {
+    /**
+     * 결과를 전송 규격으로 감싼다.
+     *
+     * @param type         MCP_TOOL_CALL | REST_JSON
+     * @param tool         MCP 도구명 (MCP_TOOL_CALL)
+     * @param argumentsKey MCP arguments 안에서 배열이 들어갈 키 (예: entries)
+     * @param payloadKey   REST_JSON 본문에서 배열이 들어갈 키 (예: incidents)
+     * @param attributes   REST_JSON 본문에 함께 넣을 고정 필드 (예: {"source":"gsre-agent"})
+     */
+    public record Envelope(String type, String tool, String argumentsKey, String payloadKey,
+                           JsonNode attributes) {
+
+        /** envelope 도입 초기 시그니처(호환용). */
+        public Envelope(String type, String tool, String argumentsKey) {
+            this(type, tool, argumentsKey, null, null);
+        }
+
         public boolean toolCall() {
             return "MCP_TOOL_CALL".equalsIgnoreCase(type);
+        }
+
+        /** JSON-RPC 봉투 없이 그대로 본문이 되는 순수 REST JSON. */
+        public boolean restJson() {
+            return "REST_JSON".equalsIgnoreCase(type);
         }
     }
 
@@ -135,7 +161,16 @@ public record ReshapingRule(
         JsonNode env = root.get("envelope");
         if (env != null && !env.isNull()) {
             String type = env.path("type").asText("MCP_TOOL_CALL");
-            envelope = new Envelope(type, env.path("tool").asText(""), env.path("argumentsKey").asText(""));
+            if (!"MCP_TOOL_CALL".equalsIgnoreCase(type) && !"REST_JSON".equalsIgnoreCase(type)) {
+                throw new ReshapingException("지원하지 않는 envelope.type 입니다: " + type
+                        + " (MCP_TOOL_CALL / REST_JSON)");
+            }
+            JsonNode attributes = env.get("attributes");
+            if (attributes != null && !attributes.isNull() && !attributes.isObject()) {
+                throw new ReshapingException("envelope.attributes 는 JSON 객체여야 합니다.");
+            }
+            envelope = new Envelope(type, env.path("tool").asText(""), env.path("argumentsKey").asText(""),
+                    env.path("payloadKey").asText(""), attributes);
         }
 
         return new ReshapingRule(root.path("version").asText("1.0"), mode, rootPath.isEmpty() ? "$" : rootPath,

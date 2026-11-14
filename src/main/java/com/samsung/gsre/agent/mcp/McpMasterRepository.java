@@ -10,14 +10,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** MCP API 마스터 저장소. 등록/조회만 담당하고 판단은 Orchestrator 가 한다. */
+/** MCP/REST API 마스터 저장소. 등록/조회만 담당하고 판단은 Orchestrator 가 한다. */
 @Repository
 @RequiredArgsConstructor
 public class McpMasterRepository {
 
     private static final String COLUMNS = """
-            api_id, api_name, tool_name, direction, transport_type, endpoint_url, auth_type, auth_config,
-            request_schema, request_reshaping_rule, response_reshaping_rule, source_query,
+            api_id, api_name, tool_name, direction, transport_type, endpoint_url, http_method, headers_config,
+            auth_type, auth_config, request_schema, request_reshaping_rule, response_reshaping_rule, source_query,
             timeout_ms, active_yn, description, created_by, created_at, updated_at
             """;
 
@@ -42,13 +42,15 @@ public class McpMasterRepository {
     public void insert(McpApiMaster api) {
         jdbc.update("""
                 INSERT INTO svcm_tb_mcp_api_master
-                    (api_id, api_name, tool_name, direction, transport_type, endpoint_url, auth_type, auth_config,
-                     request_schema, request_reshaping_rule, response_reshaping_rule, source_query,
-                     timeout_ms, active_yn, description, created_by, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    (api_id, api_name, tool_name, direction, transport_type, endpoint_url, http_method,
+                     headers_config, auth_type, auth_config, request_schema, request_reshaping_rule,
+                     response_reshaping_rule, source_query, timeout_ms, active_yn, description, created_by,
+                     created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 api.apiId(), api.apiName(), api.toolName(), api.direction().name(), api.transportType(),
-                api.endpointUrl(), api.authType(), api.authConfig(), api.requestSchema(),
+                api.endpointUrl(), api.httpMethod(), api.headersConfig(),
+                api.authType(), api.authConfig(), api.requestSchema(),
                 api.requestReshapingRule(), api.responseReshapingRule(), api.sourceQuery(),
                 api.timeoutMs(), api.active() ? "Y" : "N", api.description(), api.createdBy());
     }
@@ -79,6 +81,8 @@ public class McpMasterRepository {
                 rs.getString("description"),
                 rs.getString("created_by"),
                 created == null ? Instant.now() : created.toInstant(),
-                updated == null ? Instant.now() : updated.toInstant());
+                updated == null ? Instant.now() : updated.toInstant(),
+                rs.getString("http_method"),
+                rs.getString("headers_config"));
     }
 }

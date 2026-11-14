@@ -243,8 +243,14 @@ CREATE TABLE IF NOT EXISTS svcm_tb_mcp_api_master (
     tool_name               VARCHAR(100)  NOT NULL,
     -- OUTBOUND(외부 호출 후 응답 정제) / INBOUND(내부 로우 → MCP 스펙 발송) / BIDIRECTIONAL
     direction               VARCHAR(20)   NOT NULL,
+    -- 프로토콜 선택: MCP | HTTP | SSE (MCP tools/call) / REST | REST_API (순수 REST API)
+    --   이 값 하나로 Orchestrator 가 McpClientGateway 와 RestApiClientGateway 중 하나를 고른다.
     transport_type          VARCHAR(20)   DEFAULT 'HTTP',
     endpoint_url            VARCHAR(500)  NOT NULL,
+    -- REST 전용: GET / POST / PUT / PATCH / DELETE (GET·DELETE 는 남은 파라미터가 Query String 으로 간다)
+    http_method             VARCHAR(10)   DEFAULT 'POST',
+    -- REST 전용: 요청에 붙일 커스텀 헤더. 시크릿은 쓰지 않는다. (예: {"X-GSRE-Source":"incident-agent"})
+    headers_config          VARCHAR(1000),
     auth_type               VARCHAR(20)   DEFAULT 'NONE',
     -- 시크릿 값이 아니라 '환경변수 이름'만 보관한다. (예: {"envVar":"MCP_K8S_TOKEN"})
     auth_config             VARCHAR(1000),
@@ -268,6 +274,9 @@ CREATE TABLE IF NOT EXISTS svcm_tb_mcp_payload_log (
     run_id               VARCHAR(40),
     api_id               VARCHAR(40) NOT NULL,
     direction            VARCHAR(20),
+    -- 실행 시 실제로 쓴 프로토콜/메서드. 같은 apiId 라도 모드 변경 이력을 남겨 비교할 수 있게 한다.
+    transport_type       VARCHAR(20),
+    http_method          VARCHAR(10),
     raw_payload_in       CLOB,
     reshaped_payload_in  CLOB,
     raw_payload_out      CLOB,
@@ -279,3 +288,14 @@ CREATE TABLE IF NOT EXISTS svcm_tb_mcp_payload_log (
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_log_call ON svcm_tb_mcp_payload_log (call_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_log_api ON svcm_tb_mcp_payload_log (api_id, created_at);
+
+-- ---------------------------------------------------------------------
+-- 6. 기존 로컬 DB(agent-db)를 쓰던 환경의 1회성 업그레이드 DDL
+--    * 새로 만드는 DB 는 위 CREATE TABLE 에 이미 컬럼이 있으므로 실행할 필요가 없다.
+--    * H2: ALTER TABLE ... ADD COLUMN IF NOT EXISTS / MySQL: ALTER TABLE ... ADD COLUMN
+--    * 실행 전 agent-db 파일을 백업하고, 아래 두 문장을 H2 콘솔에서 한 번 실행한다.
+-- ALTER TABLE svcm_tb_mcp_api_master ADD COLUMN IF NOT EXISTS http_method    VARCHAR(10) DEFAULT 'POST';
+-- ALTER TABLE svcm_tb_mcp_api_master ADD COLUMN IF NOT EXISTS headers_config VARCHAR(1000);
+-- ALTER TABLE svcm_tb_mcp_payload_log ADD COLUMN IF NOT EXISTS transport_type VARCHAR(20);
+-- ALTER TABLE svcm_tb_mcp_payload_log ADD COLUMN IF NOT EXISTS http_method    VARCHAR(10);
+-- ---------------------------------------------------------------------

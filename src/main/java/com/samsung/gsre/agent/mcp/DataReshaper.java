@@ -141,7 +141,13 @@ public class DataReshaper {
     }
 
     private JsonNode wrapEnvelope(ReshapingRule.Envelope envelope, JsonNode payload, String fallbackToolName) {
-        if (envelope == null || !envelope.toolCall()) {
+        if (envelope == null) {
+            return payload;
+        }
+        if (envelope.restJson()) {
+            return wrapRestJson(envelope, payload);
+        }
+        if (!envelope.toolCall()) {
             return payload;
         }
         String tool = envelope.tool() == null || envelope.tool().isBlank() ? fallbackToolName : envelope.tool();
@@ -155,6 +161,29 @@ public class DataReshaper {
             wrapped.set("arguments", arguments);
         }
         return wrapped;
+    }
+
+    /**
+     * 순수 REST JSON 본문: 고정 필드(attributes) 먼저, 그 다음 배열/객체를 payloadKey 로 넣는다.
+     * JSON-RPC 봉투가 없으므로 외부 시스템은 평범한 REST 요청으로 받는다.
+     */
+    private JsonNode wrapRestJson(ReshapingRule.Envelope envelope, JsonNode payload) {
+        ObjectNode body = mapper.createObjectNode();
+        if (envelope.attributes() != null && envelope.attributes().isObject()) {
+            body.setAll((ObjectNode) envelope.attributes());
+        }
+        String key = firstNonBlank(envelope.payloadKey(), envelope.argumentsKey(), "payload");
+        body.set(key, payload);
+        return body;
+    }
+
+    private String firstNonBlank(String... candidates) {
+        for (String candidate : candidates) {
+            if (candidate != null && !candidate.isBlank()) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------
